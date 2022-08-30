@@ -1,12 +1,21 @@
 pub mod config;
 pub mod metainfo;
+pub mod tracker;
 
 use crate::config::Config;
-use crate::metainfo::parse_benfile;
+// use crate::metainfo;
 
-fn main() {
+use anyhow::Result;
+// use std::env;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // env::set_var("RUST_BACKTRACE", "1");
+
     let config = Config::new();
-    let torrent = parse_benfile(&config.file);
+    let torrent = metainfo::from_file(&config.file);
 
-    println!("{}", torrent);
+    tracker::announce(torrent).await?;
+
+    Ok(())
 }

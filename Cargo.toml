@@ -10,4 +10,7 @@ clap = { version = "3.2.16", features = ["derive"] }
 anyhow = "1.0.61"
 bendy = "0.3.3"
 openssl = "0.10.41"
-reqwest = "0.11.11"
+futures = "0.3.24"
+tokio = { version = "1.20.1", features = ["full"] }
+reqwest = { version = "0.11.11", features = ["json"] }
+urlencoding = "2.1.0"

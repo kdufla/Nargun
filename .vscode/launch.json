@@ -19,7 +19,7 @@
           "kind": "bin"
         }
       },
-      "args": [],
+      "args": ["-f", "resources/38WarBreaker.torrent"],
       "cwd": "${workspaceFolder}"
     },
     {

@@ -12,6 +12,40 @@ pub struct File {
     pub length: u64,
 }
 
+#[derive(Debug)]
+pub struct Info {
+    pub name: String,
+    pub piece_length: u64,
+    pub pieces: Vec<u8>,
+    pub length: Option<u64>,
+    pub files: Option<Vec<File>>,
+}
+
+#[derive(Debug)]
+pub struct Torrent {
+    pub info: Info,
+    pub info_hash: [u8; 20],
+    pub announce: Vec<TrackerAddr>,
+}
+
+#[derive(Debug)]
+pub enum TrackerAddr {
+    Http(String),
+    Udp(String),
+}
+
+pub fn from_buffer(buffer: &[u8]) -> Torrent {
+    Torrent::from_bencode(buffer).unwrap()
+}
+pub fn from_file(filename: &String) -> Torrent {
+    let mut buffer = Vec::new();
+
+    let mut file = fsFile::open(filename).unwrap();
+    file.read_to_end(&mut buffer).unwrap();
+
+    from_buffer(buffer.as_slice())
+}
+
 impl FromBencode for File {
     const EXPECTED_RECURSION_DEPTH: usize = 10;
 
@@ -37,15 +71,6 @@ impl FromBencode for File {
             length: length.ok_or_else(|| bendy::decoding::Error::missing_field("length"))?,
         })
     }
-}
-
-#[derive(Debug)]
-pub struct Info {
-    pub name: String,
-    pub piece_length: u64,
-    pub pieces: Vec<u8>,
-    pub length: Option<u64>,
-    pub files: Option<Vec<File>>,
 }
 
 impl Info {
@@ -112,31 +137,6 @@ impl FromBencode for Info {
     }
 }
 
-#[derive(Debug)]
-pub enum TrackerAddr {
-    Http(String),
-    Udp(String),
-}
-
-impl TrackerAddr {
-    fn from_string(s: String) -> Result<TrackerAddr> {
-        if s.starts_with("udp") {
-            Ok(TrackerAddr::Udp(s))
-        } else if s.starts_with("http") {
-            Ok(TrackerAddr::Http(s))
-        } else {
-            Err(anyhow!("tracker link other than udp or http(s)"))
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct Torrent {
-    pub info: Info,
-    pub info_hash: [u8; 20],
-    pub announce: Vec<TrackerAddr>,
-}
-
 impl FromBencode for Torrent {
     const EXPECTED_RECURSION_DEPTH: usize = 10;
 
@@ -192,6 +192,18 @@ impl FromBencode for Torrent {
     }
 }
 
+impl TrackerAddr {
+    fn from_string(s: String) -> Result<TrackerAddr> {
+        if s.starts_with("udp") {
+            Ok(TrackerAddr::Udp(s))
+        } else if s.starts_with("http") {
+            Ok(TrackerAddr::Http(s))
+        } else {
+            Err(anyhow!("tracker link other than udp or http(s)"))
+        }
+    }
+}
+
 impl fmt::Display for Torrent {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut formatted_files = Vec::new();
@@ -223,25 +235,16 @@ impl fmt::Display for Torrent {
     }
 }
 
-pub fn parse_benfile(filename: &String) -> Torrent {
-    let mut buffer = Vec::new();
-
-    let mut file = fsFile::open(filename).unwrap();
-    file.read_to_end(&mut buffer).unwrap();
-
-    Torrent::from_bencode(buffer.as_slice()).unwrap()
-}
-
 #[cfg(test)]
 mod tests {
-    use crate::metainfo::{parse_benfile, TrackerAddr};
+    use crate::metainfo::{from_file, TrackerAddr};
 
     const METAINFO_MULTI: &str = "resources/38WarBreaker.torrent";
     const METAINFO_SINGLE: &str = "resources/ubuntu-22.04.1-desktop-amd64.iso.torrent";
 
     #[test]
     fn multi_parse() {
-        let torrent = parse_benfile(&String::from(METAINFO_MULTI));
+        let torrent = from_file(&String::from(METAINFO_MULTI));
 
         assert_eq!(torrent.announce.len(), 12);
         assert!(match torrent.announce.first().unwrap() {
@@ -276,7 +279,7 @@ mod tests {
 
     #[test]
     fn single_parse() {
-        let torrent = parse_benfile(&String::from(METAINFO_SINGLE));
+        let torrent = from_file(&String::from(METAINFO_SINGLE));
 
         assert_eq!(torrent.announce.len(), 3);
         assert!(match torrent.announce.first().unwrap() {
