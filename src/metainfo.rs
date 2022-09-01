@@ -28,7 +28,7 @@ pub struct Torrent {
     pub announce: Vec<TrackerAddr>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TrackerAddr {
     Http(String),
     Udp(String),

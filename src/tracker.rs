@@ -75,17 +75,6 @@ impl FromBencode for TrackerResponse {
                     if let Some(peer_bytes) =
                         AsString::decode_bencode_object(value).map(|bytes| Some(bytes.0))?
                     {
-                        // let mut tmp = Vec::new();
-                        // for chunk in peer_bytes.chunks_exact(6) {
-                        //     // dbg!(chunk);
-                        //     let ip =
-                        //         IpAddr::V4(Ipv4Addr::new(chunk[0], chunk[1], chunk[2], chunk[3]));
-                        //     let p = ((chunk[4] as u16) << 8) | chunk[5] as u16;
-                        //     let sa = SocketAddr::new(ip, p);
-                        //     tmp.push(sa);
-                        // }
-                        // dbg!(tmp);
-
                         peers = Some(
                             peer_bytes
                                 .chunks_exact(6)
@@ -132,8 +121,8 @@ pub async fn tmp_first_contact(a: Arc<Announce>, tracker: String) -> Option<Trac
     }
 }
 
-// pub async fn announce(torrent: Torrent) -> Result<Vec<TrackerResponse>> {
-pub async fn announce(torrent: Torrent) -> Result<()> {
+pub async fn announce(torrent: &Torrent) -> Result<Vec<TrackerResponse>> {
+    // pub async fn announce(torrent: Torrent) -> Result<()> {
     let a = Arc::new(Announce {
         info_hash: torrent.info_hash.clone(),
         peer_id: [1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
@@ -165,11 +154,7 @@ pub async fn announce(torrent: Torrent) -> Result<()> {
         .flatten()
         .collect();
 
-    // vec.into_iter().flatten().collect()
-
-    dbg!(results);
-
-    Ok(())
+    Ok(results.into_iter().flatten().collect())
 }
 
 impl Announce {
