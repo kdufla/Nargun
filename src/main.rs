@@ -4,12 +4,13 @@ pub mod metainfo;
 pub mod peer;
 pub mod peer_message;
 pub mod tracker;
+pub mod util;
 
-use core::time;
-use std::thread::sleep;
+// use core::time;
+// use std::thread::sleep;
 
 use anyhow::Result;
-use tokio::io::AsyncWriteExt;
+// use tokio::io::AsyncWriteExt;
 // use std::env;
 
 #[tokio::main]
@@ -20,22 +21,22 @@ async fn main() -> Result<()> {
     let config = config::Config::new();
     let torrent = metainfo::from_file(&config.file);
 
-    let tracker_responses = tracker::announce(&torrent).await?;
+    tracker::tracker_manager(&torrent, &peer_id).await;
 
-    dbg!(&tracker_responses);
+    // dbg!(&tracker_responses);
 
-    let sa = tracker_responses[2].peers[1];
+    // let sa = tracker_responses[2].peers[1];
 
-    dbg!(&sa);
+    // dbg!(&sa);
 
-    let mut stream = peer::initiate_handshake(&sa, &torrent.info_hash, &peer_id).await?;
+    // let mut stream = peer::initiate_handshake(&sa, &torrent.info_hash, &peer_id).await?;
 
-    let message = peer_message::Message::Interested;
+    // let message = peer_message::Message::Interested;
 
-    stream.write_all(message.into_bytes()?.as_ref()).await?;
+    // stream.write_all(message.into_bytes()?.as_ref()).await?;
 
-    let ten_millis = time::Duration::from_millis(1000);
+    // let ten_millis = time::Duration::from_millis(1000);
 
-    sleep(ten_millis);
+    // sleep(ten_millis);
     Ok(())
 }

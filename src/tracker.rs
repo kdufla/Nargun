@@ -1,11 +1,16 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use bendy::decoding::{Decoder, FromBencode, Object};
 use bendy::encoding::AsString;
-use futures::future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::Sender;
+use tokio::time::{sleep, Duration};
 
 use crate::metainfo::{Torrent, TrackerAddr};
+
+const ANNOUNCE_RETRY: u8 = 3;
+const TRACKER_RETRY_INTERVAL: u64 = 300;
 
 #[derive(Debug)]
 pub enum AnnounceEvent {
@@ -27,7 +32,7 @@ pub struct Announce {
     pub tracker_id: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TrackerResponse {
     pub warning_message: Option<String>,
     pub interval: u64,
@@ -36,6 +41,68 @@ pub struct TrackerResponse {
     pub complete: u64,
     pub incomplete: u64,
     pub peers: Vec<SocketAddr>,
+}
+
+impl TrackerResponse {
+    fn retry_dummy() -> TrackerResponse {
+        TrackerResponse {
+            warning_message: None,
+            interval: TRACKER_RETRY_INTERVAL,
+            min_interval: None,
+            tracker_id: None,
+            complete: 0,
+            incomplete: 0,
+            peers: Vec::<SocketAddr>::new(),
+        }
+    }
+}
+
+impl Announce {
+    fn as_url(&self, tracker_url: &str) -> String {
+        let mut s = String::from(tracker_url);
+
+        s.push_str("?info_hash=");
+        s.push_str(urlencoding::encode_binary(&self.info_hash).as_ref());
+
+        s.push_str("&peer_id=");
+        s.push_str(urlencoding::encode_binary(&self.peer_id).as_ref());
+
+        s.push_str("&port=");
+        s.push_str(&self.port.to_string());
+
+        s.push_str("&uploaded=");
+        s.push_str(&self.uploaded.to_string());
+
+        s.push_str("&downloaded=");
+        s.push_str(&self.downloaded.to_string());
+
+        s.push_str("&left=");
+        s.push_str(&self.left.to_string());
+
+        s.push_str("&compact=");
+        s.push_str(&(if self.compact { 1 } else { 0 }).to_string());
+
+        if !self.compact {
+            s.push_str("&no_peer_id=");
+            s.push_str(&(if self.no_peer_id { 1 } else { 0 }).to_string());
+        }
+
+        if let Some(event) = &self.event {
+            s.push_str("&event=");
+            s.push_str(match event {
+                AnnounceEvent::Started => "started",
+                AnnounceEvent::Stopped => "stopped",
+                AnnounceEvent::Completed => "completed",
+            });
+        }
+
+        if let Some(tracker_id) = &self.tracker_id {
+            s.push_str("&trackerid=");
+            s.push_str(tracker_id);
+        }
+
+        s
+    }
 }
 
 impl FromBencode for TrackerResponse {
@@ -107,26 +174,88 @@ impl FromBencode for TrackerResponse {
     }
 }
 
-pub async fn tmp_first_contact(a: Arc<Announce>, tracker: String) -> Option<TrackerResponse> {
-    let url = a.as_url(tracker.as_str());
-
-    let resp = reqwest::get(url).await.unwrap().bytes().await.unwrap();
-
-    let mut decoder = Decoder::new(resp.as_ref());
-    let obj = decoder.next_object().unwrap();
-
-    match obj {
-        Some(object) => Some(TrackerResponse::decode_bencode_object(object).unwrap()),
-        None => None,
+async fn fetch_response(url: &String) -> Result<TrackerResponse> {
+    match reqwest::get(url).await {
+        Ok(response) => match response.bytes().await {
+            Ok(bytes) => match Decoder::new(bytes.as_ref()).next_object() {
+                Ok(decoder_object_option) => match decoder_object_option {
+                    Some(decoder_object) => {
+                        match TrackerResponse::decode_bencode_object(decoder_object) {
+                            Ok(tracker_response) => Ok(tracker_response),
+                            Err(_) => {
+                                Err(anyhow!("tracker response is not struct TrackerResponse"))
+                            }
+                        }
+                    }
+                    None => Err(anyhow!("should be unreachable for the first object")),
+                },
+                Err(_) => Err(anyhow!("tracker response: not bencoded")),
+            },
+            Err(_) => Err(anyhow!("tracker response: without body")),
+        },
+        Err(_) => Err(anyhow!("tracker unreachable")),
     }
 }
 
-pub async fn announce(torrent: &Torrent) -> Result<Vec<TrackerResponse>> {
-    // pub async fn announce(torrent: Torrent) -> Result<()> {
+pub async fn contact_tracker(
+    a: Arc<Announce>,
+    tracker: String,
+    tx_tracker_response: Sender<(u32, String, TrackerResponse)>,
+    id: u32,
+) {
+    let url = a.as_url(tracker.as_str());
+
+    if cfg!(feature = "verbose") {
+        println!("try announce {}", tracker);
+    }
+
+    let mut tracker_response = fetch_response(&url).await;
+
+    if tracker_response.is_err() {
+        if cfg!(feature = "verbose") {
+            println!("retry announce {}", tracker);
+        }
+        for _ in 0..ANNOUNCE_RETRY {
+            tracker_response = fetch_response(&url).await;
+
+            if tracker_response.is_ok() {
+                break;
+            }
+        }
+    }
+
+    match tracker_response {
+        Ok(tracker_response) => {
+            if cfg!(feature = "verbose") {
+                println!("success announce {}", tracker);
+            }
+            tx_tracker_response
+                .send((id, tracker, tracker_response))
+                .await
+                .unwrap();
+        }
+        Err(e) => {
+            if cfg!(feature = "verbose") {
+                println!("failed announce {}", tracker);
+            }
+            tx_tracker_response
+                .send((id, tracker, TrackerResponse::retry_dummy()))
+                .await
+                .unwrap();
+            println!("tracker_{} | {}", id, e);
+        }
+    }
+}
+
+pub async fn announce(
+    torrent: &Torrent,
+    peer_id: &[u8; 20],
+    tx_tracker_response: Sender<(u32, String, TrackerResponse)>,
+) {
     let a = Arc::new(Announce {
         info_hash: torrent.info_hash.clone(),
-        peer_id: [1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0],
-        port: 6887,
+        peer_id: peer_id.clone(),
+        port: 6887, // TODO
         uploaded: 0,
         downloaded: 0,
         left: torrent.info.length(),
@@ -136,71 +265,108 @@ pub async fn announce(torrent: &Torrent) -> Result<Vec<TrackerResponse>> {
         tracker_id: None,
     });
 
-    let handles = torrent.announce.iter().filter_map(|tracker| match tracker {
-        TrackerAddr::Http(addr) => {
+    let mut count = 0;
+
+    for tracker in torrent.announce.iter() {
+        if let TrackerAddr::Http(http_tracker) = tracker {
             let a = a.clone();
-            let addr = addr.clone();
-            dbg!(&addr);
-            Some(tokio::spawn(
-                async move { tmp_first_contact(a, addr).await },
-            ))
+            let http_tracker = http_tracker.clone();
+            let tx_tracker_response = tx_tracker_response.clone();
+            tokio::spawn(async move {
+                contact_tracker(a, http_tracker, tx_tracker_response, count).await
+            });
+            count += 1;
         }
-        _ => None,
-    });
-
-    let results: Vec<Option<TrackerResponse>> = future::join_all(handles)
-        .await
-        .into_iter()
-        .flatten()
-        .collect();
-
-    Ok(results.into_iter().flatten().collect())
+    }
 }
 
-impl Announce {
-    fn as_url(&self, url: &str) -> String {
-        let mut s = String::from(url);
+fn owned_id_or_none(tracker: &Option<TrackerResponse>) -> Option<String> {
+    match tracker {
+        Some(t) => match &t.tracker_id {
+            Some(id) => Some(id.clone()),
+            None => None,
+        },
+        None => None,
+    }
+}
 
-        s.push_str("?info_hash=");
-        s.push_str(urlencoding::encode_binary(&self.info_hash).as_ref());
+fn update_tracker_list(
+    trackers: &mut Vec<Option<TrackerResponse>>,
+    mut tr: TrackerResponse,
+    idx: usize,
+) {
+    let old_response = std::mem::replace(&mut trackers[idx], None);
 
-        s.push_str("&peer_id=");
-        s.push_str(urlencoding::encode_binary(&self.peer_id).as_ref());
+    tr.tracker_id = if tr.tracker_id.is_none() && old_response.is_some() {
+        old_response.unwrap().tracker_id
+    } else {
+        None
+    };
 
-        s.push_str("&port=");
-        s.push_str(&self.port.to_string());
+    trackers[idx] = Some(tr);
+}
 
-        s.push_str("&uploaded=");
-        s.push_str(&self.uploaded.to_string());
+fn reannounce_after_interval(
+    torrent: &Torrent,
+    peer_id: &[u8; 20],
+    tr: &Option<TrackerResponse>,
+    tx_tracker_response: &Sender<(u32, String, TrackerResponse)>,
+    tracker_url: String,
+    id: u32,
+) {
+    let a = Arc::new(Announce {
+        info_hash: torrent.info_hash.clone(),
+        peer_id: peer_id.clone(),
+        port: 6887,
+        uploaded: 0, // TODO impl stats
+        downloaded: 0,
+        left: torrent.info.length(),
+        compact: true,
+        no_peer_id: true,
+        event: None,
+        tracker_id: owned_id_or_none(tr),
+    });
 
-        s.push_str("&downloaded=");
-        s.push_str(&self.downloaded.to_string());
+    let sleep_mills = Duration::from_millis(
+        1000 * match tr {
+            Some(r) => r.interval,
+            None => 0,
+        },
+    );
 
-        s.push_str("&left=");
-        s.push_str(&self.left.to_string());
+    if cfg!(feature = "verbose") {
+        println!("announce {} in {:?}", tracker_url, sleep_mills);
+    }
 
-        s.push_str("&compact=");
-        s.push_str(&(if self.compact { 1 } else { 0 }).to_string());
+    let tx_tracker_response = tx_tracker_response.clone();
+    tokio::spawn(async move {
+        sleep(sleep_mills).await;
+        contact_tracker(a, tracker_url, tx_tracker_response, id).await
+    });
+}
 
-        if !self.compact {
-            s.push_str("&no_peer_id=");
-            s.push_str(&(if self.no_peer_id { 1 } else { 0 }).to_string());
+pub async fn tracker_manager(torrent: &Torrent, peer_id: &[u8; 20]) {
+    let (tx_tracker_response, mut rx_tracker_response) = mpsc::channel(32);
+
+    announce(torrent, peer_id, tx_tracker_response.clone()).await;
+
+    let mut http_trackers: Vec<Option<TrackerResponse>> =
+        vec![None; torrent.count_http_announcers()];
+
+    loop {
+        let tr = rx_tracker_response.recv().await;
+        if let Some((id, tracker_url, tracker_response)) = tr {
+            update_tracker_list(&mut http_trackers, tracker_response, id as usize);
+            reannounce_after_interval(
+                torrent,
+                peer_id,
+                &http_trackers[id as usize],
+                &tx_tracker_response,
+                tracker_url,
+                id,
+            )
+        } else {
+            break;
         }
-
-        if let Some(event) = &self.event {
-            s.push_str("&event=");
-            s.push_str(match event {
-                AnnounceEvent::Started => "started",
-                AnnounceEvent::Stopped => "stopped",
-                AnnounceEvent::Completed => "completed",
-            });
-        }
-
-        if let Some(tracker_id) = &self.tracker_id {
-            s.push_str("&trackerid=");
-            s.push_str(tracker_id);
-        }
-
-        s
     }
 }

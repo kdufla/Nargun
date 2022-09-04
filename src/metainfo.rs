@@ -235,6 +235,17 @@ impl fmt::Display for Torrent {
     }
 }
 
+impl Torrent {
+    pub fn count_http_announcers(&self) -> usize {
+        self.announce
+            .iter()
+            .fold(0, |count, announcer| match *announcer {
+                TrackerAddr::Http(_) => count + 1,
+                _ => count,
+            })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::metainfo::{from_file, TrackerAddr};
