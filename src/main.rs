@@ -6,12 +6,8 @@ pub mod peer_message;
 pub mod tracker;
 pub mod util;
 
-// use core::time;
-// use std::thread::sleep;
-
 use anyhow::Result;
-// use tokio::io::AsyncWriteExt;
-// use std::env;
+use peer::Peers;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -21,7 +17,9 @@ async fn main() -> Result<()> {
     let config = config::Config::new();
     let torrent = metainfo::from_file(&config.file);
 
-    tracker::tracker_manager(&torrent, &peer_id).await;
+    let peers = Peers::new(torrent.count_pieces());
+
+    tracker::tracker_manager(&torrent, &peer_id, &peers).await;
 
     // dbg!(&tracker_responses);
 

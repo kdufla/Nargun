@@ -8,6 +8,7 @@ use tokio::sync::mpsc::Sender;
 use tokio::time::{sleep, Duration};
 
 use crate::metainfo::{Torrent, TrackerAddr};
+use crate::Peers;
 
 const ANNOUNCE_RETRY: u8 = 3;
 const TRACKER_RETRY_INTERVAL: u64 = 300;
@@ -280,12 +281,9 @@ pub async fn announce(
     }
 }
 
-fn owned_id_or_none(tracker: &Option<TrackerResponse>) -> Option<String> {
-    match tracker {
-        Some(t) => match &t.tracker_id {
-            Some(id) => Some(id.clone()),
-            None => None,
-        },
+fn owned_id_or_none(tracker: &TrackerResponse) -> Option<String> {
+    match &tracker.tracker_id {
+        Some(id) => Some(id.clone()),
         None => None,
     }
 }
@@ -309,7 +307,7 @@ fn update_tracker_list(
 fn reannounce_after_interval(
     torrent: &Torrent,
     peer_id: &[u8; 20],
-    tr: &Option<TrackerResponse>,
+    tr: &TrackerResponse,
     tx_tracker_response: &Sender<(u32, String, TrackerResponse)>,
     tracker_url: String,
     id: u32,
@@ -327,12 +325,7 @@ fn reannounce_after_interval(
         tracker_id: owned_id_or_none(tr),
     });
 
-    let sleep_mills = Duration::from_millis(
-        1000 * match tr {
-            Some(r) => r.interval,
-            None => 0,
-        },
-    );
+    let sleep_mills = Duration::from_millis(1000 * tr.interval);
 
     if cfg!(feature = "verbose") {
         println!("announce {} in {:?}", tracker_url, sleep_mills);
@@ -345,7 +338,7 @@ fn reannounce_after_interval(
     });
 }
 
-pub async fn tracker_manager(torrent: &Torrent, peer_id: &[u8; 20]) {
+pub async fn tracker_manager(torrent: &Torrent, peer_id: &[u8; 20], peers: &Peers) {
     let (tx_tracker_response, mut rx_tracker_response) = mpsc::channel(32);
 
     announce(torrent, peer_id, tx_tracker_response.clone()).await;
@@ -356,15 +349,20 @@ pub async fn tracker_manager(torrent: &Torrent, peer_id: &[u8; 20]) {
     loop {
         let tr = rx_tracker_response.recv().await;
         if let Some((id, tracker_url, tracker_response)) = tr {
-            update_tracker_list(&mut http_trackers, tracker_response, id as usize);
             reannounce_after_interval(
                 torrent,
                 peer_id,
-                &http_trackers[id as usize],
+                &tracker_response,
                 &tx_tracker_response,
                 tracker_url,
                 id,
-            )
+            );
+
+            for peer in &tracker_response.peers {
+                peers.insert(peer.clone());
+            }
+
+            update_tracker_list(&mut http_trackers, tracker_response, id as usize);
         } else {
             break;
         }

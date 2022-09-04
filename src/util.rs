@@ -1,6 +1,9 @@
+use anyhow::{anyhow, Result};
+
 #[derive(Debug)]
 pub struct Bitmap {
     data: Vec<u8>,
+    len: usize,
 }
 
 impl Bitmap {
@@ -8,6 +11,22 @@ impl Bitmap {
         let number_of_bytes_needed = (f64::from(n) / 8.0).ceil() as usize;
         Bitmap {
             data: vec![0; number_of_bytes_needed],
+            len: n as usize,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn replace_data(&mut self, data: &[u8]) -> Result<()> {
+        if data.len() == self.data.len() {
+            for (i, d) in data.iter().enumerate() {
+                self.data[i] = *d;
+            }
+            Ok(())
+        } else {
+            Err(anyhow!("piece count mismatch"))
         }
     }
 
@@ -42,5 +61,11 @@ impl Bitmap {
 
             self.data[byte_idx] = self.data[byte_idx] & clear_bit[bit_offset];
         }
+    }
+
+    pub fn weight(&self) -> u32 {
+        self.data
+            .iter()
+            .fold(0, |weight, x| weight + x.count_ones())
     }
 }

@@ -244,6 +244,10 @@ impl Torrent {
                 _ => count,
             })
     }
+
+    pub fn count_pieces(&self) -> u32 {
+        self.info.pieces.len() as u32 / 20
+    }
 }
 
 #[cfg(test)]
