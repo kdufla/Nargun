@@ -10,7 +10,7 @@ use self::pending_pieces::PendingPieces;
 use crate::constants::{BLOCK_SIZE, KEEP_ALIVE_INTERVAL_SECS, MAX_CONCURRENT_REQUESTS};
 use crate::peer_message::{Message, Request};
 use crate::unsigned_ceil_div;
-use crate::util::{Bitmap, ID};
+use crate::util::{bitmap::Bitmap, id::ID};
 use anyhow::Result;
 use std::net::SocketAddr;
 use tokio::io::{split, AsyncWriteExt, ReadHalf, WriteHalf};
@@ -175,7 +175,7 @@ impl PeerConnection {
                     // TODO handle error
                     self.pieces.replace_data(bitfield.0.as_ref())?;
                 }
-                Message::Request(request) => (), // TODO upload
+                Message::Request(_request) => (), // TODO upload
                 Message::Piece(mut piece) => {
                     if pending_pieces.store_chunk_get_remaining(&mut piece)? == 0 {
                         if let Some(tx) = pending_pieces.remove(piece.index) {

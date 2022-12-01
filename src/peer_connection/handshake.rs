@@ -10,7 +10,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use crate::constants::{HANDSHAKE_LENGTH_FOR_BITTORRENT_PROTOCOL, PSTR, PSTRLEN};
-use crate::util::ID;
+use crate::util::id::ID;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Handshake {

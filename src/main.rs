@@ -18,7 +18,7 @@ use peer_connection::{
     PeerConnection,
 };
 use tokio::{sync::mpsc, time::sleep};
-use util::{Bitmap, ID};
+use util::{bitmap::Bitmap, id::ID};
 // use peer::Peers;
 
 #[tokio::main]
