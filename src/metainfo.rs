@@ -6,6 +6,8 @@ use std::fmt;
 use std::fs::File as fsFile;
 use std::io::Read;
 
+use crate::unsigned_ceil_div;
+
 #[derive(Debug)]
 pub struct File {
     pub path: Vec<String>,
@@ -87,6 +89,10 @@ impl Info {
             Some(files) => files.iter().map(|f| f.length).sum(),
             None => self.length.unwrap(),
         }
+    }
+
+    pub fn number_of_pieces(&self) -> u64 {
+        unsigned_ceil_div!(self.length(), self.piece_length)
     }
 }
 

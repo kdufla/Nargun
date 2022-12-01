@@ -5,9 +5,18 @@ use serde::ser::SerializeTuple;
 use serde::ser::Serializer;
 use serde::Serialize;
 use std::mem::size_of;
+use tokio::io::AsyncReadExt;
+use tokio::io::ReadHalf;
+use tokio::net::TcpStream;
 
 #[derive(Debug)]
-pub struct SerializableBytes(Bytes);
+pub struct SerializableBytes(pub Bytes);
+
+impl SerializableBytes {
+    pub fn new(data: Bytes) -> SerializableBytes {
+        SerializableBytes(data)
+    }
+}
 
 impl serde::Serialize for SerializableBytes {
     fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
@@ -24,17 +33,17 @@ impl serde::Serialize for SerializableBytes {
 
 #[derive(Debug, Serialize)]
 pub struct Request {
-    index: u32,
-    begin: u32,
-    length: u32,
+    pub index: u32,
+    pub begin: u32,
+    pub length: u32,
 }
 
 // TODO manually deserialize this or make NoSizeArray deserialize
 #[derive(Debug, Serialize)]
 pub struct Piece {
-    index: u32,
-    begin: u32,
-    block: SerializableBytes,
+    pub index: u32,
+    pub begin: u32,
+    pub block: SerializableBytes,
 }
 
 impl Piece {
@@ -139,7 +148,100 @@ macro_rules! next_element {
     }};
 }
 
+macro_rules! read_n_into_buffer_or_err {
+    ($stream:expr, $n:expr, $buffer:expr) => {{
+        let mut read_pointer = 0;
+        loop {
+            let read_bytes = $stream.read(&mut $buffer[read_pointer..$n]).await?;
+            read_pointer += read_bytes;
+
+            if read_bytes == 0 {
+                anyhow::bail!("disconnected")
+            }
+
+            if read_pointer == $n {
+                break;
+            }
+        }
+    }};
+}
+
+macro_rules! read_type_or_err {
+    ($stream:expr, $t:ty) => {{
+        let mut buffer = [0 as u8; size_of::<$t>()];
+        read_n_into_buffer_or_err!($stream, size_of::<$t>(), buffer);
+        <$t>::from_be_bytes(buffer)
+    }};
+}
+
+macro_rules! slice_as_u32_be {
+    ($slice:expr) => {
+        (($slice[0] as u32) << 24)
+            + (($slice[1] as u32) << 16)
+            + (($slice[2] as u32) << 8)
+            + (($slice[3] as u32) << 0)
+    };
+}
+
 impl Message {
+    pub async fn from_stream<'a>(stream: &mut ReadHalf<&mut TcpStream>) -> Result<Self> {
+        let len = read_type_or_err!(stream, u32);
+        print!("received with len={:?} ", len);
+
+        if len == 0 {
+            println!("KeepAlive");
+            Ok(Message::KeepAlive)
+        } else {
+            let id = read_type_or_err!(stream, u8);
+            println!("id={:?}", id);
+
+            Ok(match id {
+                0 => Message::Choke,
+                1 => Message::Unchoke,
+                2 => Message::Interested,
+                3 => Message::NotInterested,
+                4 => Message::Have(read_type_or_err!(stream, u32)),
+                5 => {
+                    let len = len as usize - 1;
+                    let mut buf = vec![0 as u8; len];
+
+                    read_n_into_buffer_or_err!(stream, len, &mut buf);
+
+                    Message::Bitfield(SerializableBytes(Bytes::from(buf)))
+                }
+                6 => {
+                    let mut buf = [0 as u8; 3 * 4];
+                    read_n_into_buffer_or_err!(stream, 3 * 4, buf);
+
+                    Message::Request(Request {
+                        index: slice_as_u32_be!(buf[..]),
+                        begin: slice_as_u32_be!(buf[4..]),
+                        length: slice_as_u32_be!(buf[8..]),
+                    })
+                }
+
+                7 => {
+                    let len = len as usize - 1;
+                    let mut buf = vec![0 as u8; len];
+
+                    read_n_into_buffer_or_err!(stream, len, &mut buf);
+
+                    let mut buf = Bytes::from(buf);
+
+                    let index_buf = buf.split_to(4);
+                    let begin_buf = buf.split_to(4);
+
+                    Message::Piece(Piece::new(
+                        slice_as_u32_be!(index_buf[..]),
+                        slice_as_u32_be!(begin_buf[..]),
+                        buf,
+                    ))
+                }
+                _ => unimplemented!(),
+            })
+        }
+    }
+
     pub fn from_bytes(mut buff: Bytes) -> Result<Message> {
         let len = next_element!(buff, u32);
 

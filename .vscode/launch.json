@@ -19,7 +19,7 @@
           "kind": "bin"
         }
       },
-      "args": ["-f", "resources/38WarBreaker.torrent"],
+      "args": ["-f", "resources/ubuntu-22.04.1-desktop-amd64.iso.torrent"],
       "cwd": "${workspaceFolder}"
     },
     {

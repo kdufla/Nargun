@@ -8,7 +8,7 @@ use tokio::sync::mpsc::Sender;
 use tokio::time::{sleep, Duration};
 
 use crate::metainfo::{Torrent, TrackerAddr};
-use crate::Peers;
+use crate::peer::Peers;
 
 const ANNOUNCE_RETRY: u8 = 3;
 const TRACKER_RETRY_INTERVAL: u64 = 300;
@@ -338,7 +338,7 @@ fn reannounce_after_interval(
     });
 }
 
-pub async fn tracker_manager(torrent: &Torrent, peer_id: &[u8; 20], peers: &Peers) {
+pub async fn tracker_manager(torrent: &Torrent, peer_id: &[u8; 20], peers: Peers) {
     let (tx_tracker_response, mut rx_tracker_response) = mpsc::channel(32);
 
     announce(torrent, peer_id, tx_tracker_response.clone()).await;
@@ -358,9 +358,7 @@ pub async fn tracker_manager(torrent: &Torrent, peer_id: &[u8; 20], peers: &Peer
                 id,
             );
 
-            for peer in &tracker_response.peers {
-                peers.insert(peer.clone());
-            }
+            peers.insert(&tracker_response.peers);
 
             update_tracker_list(&mut http_trackers, tracker_response, id as usize);
         } else {
