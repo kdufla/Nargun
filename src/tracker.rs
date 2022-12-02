@@ -358,7 +358,7 @@ pub async fn tracker_manager(torrent: &Torrent, peer_id: &[u8; 20], peers: Peers
                 id,
             );
 
-            peers.insert(&tracker_response.peers);
+            peers.insert_list(&tracker_response.peers);
 
             update_tracker_list(&mut http_trackers, tracker_response, id as usize);
         } else {
