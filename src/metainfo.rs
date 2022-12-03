@@ -1,12 +1,11 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use bendy::decoding::{Decoder, FromBencode, Object};
 use bendy::encoding::AsString;
 use openssl::sha;
+use std::collections::HashSet;
 use std::fmt;
 use std::fs::File as fsFile;
 use std::io::Read;
-
-use crate::unsigned_ceil_div;
 
 #[derive(Debug)]
 pub struct File {
@@ -27,10 +26,10 @@ pub struct Info {
 pub struct Torrent {
     pub info: Info,
     pub info_hash: [u8; 20],
-    pub announce: Vec<TrackerAddr>,
+    pub announce: HashSet<TrackerAddr>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TrackerAddr {
     Http(String),
     Udp(String),
@@ -91,8 +90,8 @@ impl Info {
         }
     }
 
-    pub fn number_of_pieces(&self) -> u64 {
-        unsigned_ceil_div!(self.length(), self.piece_length)
+    pub fn number_of_pieces(&self) -> u32 {
+        self.pieces.len() as u32
     }
 }
 
@@ -149,7 +148,7 @@ impl FromBencode for Torrent {
     fn decode_bencode_object(object: Object) -> Result<Self, bendy::decoding::Error> {
         let mut info = None;
         let mut info_hash = None;
-        let mut announce = Vec::new();
+        let mut announce = HashSet::new();
 
         let mut torrent = object.try_into_dictionary()?;
         while let Some(kv) = torrent.next_pair()? {
@@ -169,23 +168,25 @@ impl FromBencode for Torrent {
                     }
                 }
                 (b"announce", value) => {
-                    announce.push(TrackerAddr::from_string(String::decode_bencode_object(
-                        value,
-                    )?));
+                    if let Some(tracker_addr) =
+                        TrackerAddr::from_string(String::decode_bencode_object(value)?)
+                    {
+                        announce.insert(tracker_addr);
+                    }
                 }
                 (b"announce-list", value) => {
                     let list = Vec::<Vec<String>>::decode_bencode_object(value)?;
-                    for i in list {
-                        for s in i {
-                            announce.push(TrackerAddr::from_string(s));
+                    for intermediate in list {
+                        for url_string in intermediate {
+                            if let Some(tracker_addr) = TrackerAddr::from_string(url_string) {
+                                announce.insert(tracker_addr);
+                            }
                         }
                     }
                 }
                 _ => (),
             }
         }
-
-        let announce: Vec<TrackerAddr> = announce.into_iter().filter_map(|r| r.ok()).collect();
 
         Ok(Torrent {
             announce: match announce.is_empty() {
@@ -199,13 +200,13 @@ impl FromBencode for Torrent {
 }
 
 impl TrackerAddr {
-    fn from_string(s: String) -> Result<TrackerAddr> {
+    fn from_string(s: String) -> Option<TrackerAddr> {
         if s.starts_with("udp") {
-            Ok(TrackerAddr::Udp(s))
+            Some(TrackerAddr::Udp(s))
         } else if s.starts_with("http") {
-            Ok(TrackerAddr::Http(s))
+            Some(TrackerAddr::Http(s))
         } else {
-            Err(anyhow!("tracker link other than udp or http(s)"))
+            None
         }
     }
 }
@@ -251,8 +252,15 @@ impl Torrent {
             })
     }
 
-    pub fn count_pieces(&self) -> u32 {
-        self.info.pieces.len() as u32 / 20
+    pub fn http_trackers(&self) -> impl Iterator<Item = &String> {
+        self.announce.iter().filter_map(|x| match x {
+            TrackerAddr::Http(s) => Some(s),
+            _ => None,
+        })
+    }
+
+    pub fn count_pieces(&self) -> u64 {
+        self.info.pieces.len() as u64 / 20
     }
 }
 
@@ -267,11 +275,10 @@ mod tests {
     fn multi_parse() {
         let torrent = from_file(&String::from(METAINFO_MULTI));
 
-        assert_eq!(torrent.announce.len(), 12);
-        assert!(match torrent.announce.first().unwrap() {
-            TrackerAddr::Http(s) if s == "http://tracker.files.fm:6969/announce" => true,
-            _ => false,
-        });
+        assert_eq!(torrent.announce.len(), 11);
+        assert!(torrent.announce.contains(&TrackerAddr::Http(
+            "http://tracker.files.fm:6969/announce".to_string()
+        )));
         assert_eq!(
             torrent.info_hash,
             [
@@ -302,11 +309,10 @@ mod tests {
     fn single_parse() {
         let torrent = from_file(&String::from(METAINFO_SINGLE));
 
-        assert_eq!(torrent.announce.len(), 3);
-        assert!(match torrent.announce.first().unwrap() {
-            TrackerAddr::Http(s) if s == "https://torrent.ubuntu.com/announce" => true,
-            _ => false,
-        });
+        assert_eq!(torrent.announce.len(), 2);
+        assert!(torrent.announce.contains(&TrackerAddr::Http(
+            "https://torrent.ubuntu.com/announce".to_string()
+        )));
         assert_eq!(
             torrent.info_hash,
             [
