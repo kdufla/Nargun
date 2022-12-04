@@ -7,7 +7,7 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug executable 'nargun'",
+      "name": "Debug executable with ubuntu",
       "cargo": {
         "args": [
           "build",
@@ -20,6 +20,24 @@
         }
       },
       "args": ["-f", "resources/ubuntu-22.04.1-desktop-amd64.iso.torrent"],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug executable with warbreaker",
+      "cargo": {
+        "args": [
+          "build",
+          "--bin=nargun",
+          "--package=nargun"
+        ],
+        "filter": {
+          "name": "nargun",
+          "kind": "bin"
+        }
+      },
+      "args": ["-f", "resources/38WarBreaker.torrent"],
       "cwd": "${workspaceFolder}"
     },
     {

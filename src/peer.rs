@@ -16,6 +16,7 @@ struct PeerEntry {
     last_connection_instant: Option<Instant>,
 }
 
+#[derive(Clone)]
 pub struct Peers {
     data: Arc<StdMutex<HashMap<SocketAddr, PeerEntry>>>,
 }
