@@ -7,6 +7,8 @@ use std::fmt;
 use std::fs::File as fsFile;
 use std::io::Read;
 
+use crate::unsigned_ceil_div;
+
 #[derive(Debug)]
 pub struct File {
     pub path: Vec<String>,
@@ -91,7 +93,7 @@ impl Info {
     }
 
     pub fn number_of_pieces(&self) -> u32 {
-        self.pieces.len() as u32
+        unsigned_ceil_div!(self.pieces.len(), 20) as u32
     }
 }
 
