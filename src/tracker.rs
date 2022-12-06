@@ -70,7 +70,7 @@ async fn manage_http_tracker(
         tracker_url,
         info_hash,
         peer_id,
-        port: 6887, // TODO
+        port: 46491, // TODO this port forwarding, read what UPnP is and use is (this seems like the answer https://crates.io/crates/igd)
         uploaded: 0,
         downloaded: 0,
         left: (piece_count - pieces_downloaded.load(Ordering::Relaxed)) * piece_length,
