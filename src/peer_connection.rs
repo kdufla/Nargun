@@ -190,6 +190,7 @@ impl PeerConnection {
                     let (finished_command, _) = Command::new(CommandType::Finished);
                     self.command_sender.send(finished_command).await?;
                 }
+                Message::Port(_listen_port) => {}
             };
         }
     }

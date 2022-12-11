@@ -71,6 +71,7 @@ pub enum Message {
     Bitfield(SerializableBytes),
     Request(Request),
     Piece(Piece),
+    Port(u16),
 }
 
 impl Serialize for Message {
@@ -116,7 +117,7 @@ impl Serialize for Message {
                 seq.serialize_element(&(1 + bitfield.0.len() as u32))?;
                 seq.serialize_element(&(5 as u8))?;
                 for byte in bitfield.0.iter() {
-                    seq.serialize_element(byte)?;
+                    seq.serialize_element(byte)?; // TODO this is most likely wrong because of the len 3 tuple
                 }
                 seq.end()
             }
@@ -134,18 +135,19 @@ impl Serialize for Message {
                 seq.serialize_element(&piece.index)?;
                 seq.serialize_element(&piece.begin)?;
                 for byte in piece.block.0.iter() {
-                    seq.serialize_element(byte)?;
+                    seq.serialize_element(byte)?; // TODO this is most likely wrong because of the len 3 tuple
                 }
+                seq.end()
+            }
+            Message::Port(listen_port) => {
+                let mut seq = serializer.serialize_tuple(3)?;
+                seq.serialize_element(&(3 as u32))?;
+                seq.serialize_element(&(9 as u8))?;
+                seq.serialize_element(listen_port)?;
                 seq.end()
             }
         }
     }
-}
-
-macro_rules! next_element {
-    ($buff:expr, $t:ty) => {{
-        <$t>::from_be_bytes($buff.split_to(size_of::<$t>()).as_ref().try_into().unwrap())
-    }};
 }
 
 macro_rules! read_n_into_buffer_or_err {
@@ -236,38 +238,10 @@ impl Message {
                         slice_as_u32_be!(begin_buf[..]),
                         buf,
                     ))
-                }
-                _ => unimplemented!(),
-            })
-        }
-    }
-
-    pub fn from_bytes(mut buff: Bytes) -> Result<Message> {
-        let len = next_element!(buff, u32);
-
-        if len == 0 {
-            Ok(Message::KeepAlive)
-        } else {
-            let id = next_element!(buff, u8);
-
-            Ok(match id {
-                0 => Message::Choke,
-                1 => Message::Unchoke,
-                2 => Message::Interested,
-                3 => Message::NotInterested,
-                4 => Message::Have(next_element!(buff, u32)),
-                5 => Message::Bitfield(SerializableBytes(buff)),
-                6 => Message::Request(Request {
-                    index: next_element!(buff, u32),
-                    begin: next_element!(buff, u32),
-                    length: next_element!(buff, u32),
-                }),
-                7 => Message::Piece(Piece::new(
-                    next_element!(buff, u32),
-                    next_element!(buff, u32),
-                    buff,
-                )),
-                _ => unimplemented!(),
+                } // TODO why did I not implement an 8 (cancel)?
+                9 => Message::Port(read_type_or_err!(stream, u16)),
+                _ => unimplemented!(), // TODO this might cause problems. on random wrong message read pointer is stuck on a random place.
+                                       // it might jump over the actual message. I should probably check message validity byte-by-byte with peek.
             })
         }
     }

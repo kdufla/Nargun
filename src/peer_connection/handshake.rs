@@ -26,7 +26,7 @@ impl Handshake {
         Handshake {
             pstrlen: PSTRLEN,
             pstr: Pstr(PSTR.to_string()),
-            reserved: [0; 8],
+            reserved: [0, 0, 0, 0, 0, 0, 0, 1],
             info_hash: info_hash,
             peer_id: peer_id,
         }

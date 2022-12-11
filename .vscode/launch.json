@@ -7,7 +7,7 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug executable with ubuntu",
+      "name": "run ubuntu",
       "cargo": {
         "args": [
           "build",
@@ -25,7 +25,7 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug executable with warbreaker",
+      "name": "run warbreaker",
       "cargo": {
         "args": [
           "build",
@@ -43,7 +43,7 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug unit tests in executable 'nargun'",
+      "name": "tests",
       "cargo": {
         "args": [
           "test",

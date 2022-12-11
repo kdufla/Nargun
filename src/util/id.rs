@@ -10,6 +10,15 @@ impl ID {
     pub fn new(id_array: [u8; 20]) -> Self {
         Self(id_array)
     }
+
+    pub fn get_bit(&self, i: usize) -> bool {
+        let byte_idx = i / 8;
+        let bit_offset = i % 8;
+
+        let bit_filter = 0b1000_0000u8 >> bit_offset;
+
+        bit_filter & self.0[byte_idx] > 0
+    }
 }
 
 impl Eq for ID {}
