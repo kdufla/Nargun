@@ -3,6 +3,9 @@ use bendy::decoding::{FromBencode, Object};
 use bendy::encoding::AsString;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+use crate::constants::SIX;
+use crate::util::functions::socketaddr_from_compact_bytes;
+
 #[derive(Debug, Clone)]
 pub struct Response {
     pub warning_message: Option<String>,
@@ -51,19 +54,14 @@ impl FromBencode for Response {
                     if let Some(peer_bytes) =
                         AsString::decode_bencode_object(value).map(|bytes| Some(bytes.0))?
                     {
-                        peers = Some(
-                            peer_bytes
-                                .chunks_exact(6)
-                                .map(|chunk| {
-                                    SocketAddr::new(
-                                        IpAddr::V4(Ipv4Addr::new(
-                                            chunk[0], chunk[1], chunk[2], chunk[3],
-                                        )),
-                                        ((chunk[4] as u16) << 8) | chunk[5] as u16,
-                                    )
-                                })
-                                .collect(),
-                        );
+                        let x = peer_bytes
+                            .chunks_exact(SIX)
+                            .map(socketaddr_from_compact_bytes)
+                            .filter(Result::is_ok)
+                            .map(Result::unwrap)
+                            .collect(); // TODO wtf did i just do. no need for two maps and needs error H
+
+                        peers = Some(x);
                     }
                 }
                 _ => (),

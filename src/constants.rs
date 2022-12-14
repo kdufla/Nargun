@@ -8,3 +8,5 @@ pub const KEEP_ALIVE_INTERVAL_SECS: u64 = 100;
 pub const MAX_CONCURRENT_REQUESTS: u32 = 3;
 pub const PSTR: &str = "BitTorrent protocol";
 pub const PSTRLEN: u8 = 19;
+pub const SIX: usize = 6;
+pub const T26IX: usize = ID_LEN + SIX;

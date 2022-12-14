@@ -1,4 +1,11 @@
-use std::fmt::Display;
+use std::{
+    fmt::Display,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+};
+
+use anyhow::{bail, Result};
+
+use crate::constants::SIX;
 
 use super::id::ID;
 
@@ -12,4 +19,18 @@ pub fn ok_or_missing_field<T>(
 pub fn vec_to_id(v: Vec<u8>) -> ID {
     // TODO should not unwrap, improve error handling
     ID(v.try_into().unwrap())
+}
+
+pub fn socketaddr_from_compact_bytes(buff: &[u8]) -> Result<SocketAddr> {
+    match buff.len() {
+        SIX => Ok(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::new(buff[0], buff[1], buff[2], buff[3])),
+            ((buff[4] as u16) << 8) | buff[5] as u16,
+        )),
+        _ => bail!(
+            "socketaddr_from_compact_bytes: buffer len expected {} found {}",
+            SIX,
+            buff.len()
+        ),
+    }
 }
