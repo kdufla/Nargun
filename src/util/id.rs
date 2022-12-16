@@ -1,10 +1,35 @@
+use serde::{Deserializer, Serialize};
 use std::{
     cmp::Ordering,
     ops::{BitXor, Sub},
 };
 
-#[derive(Debug, Clone, Hash)]
+#[derive(Debug, Clone, Hash, Serialize)]
 pub struct ID(pub [u8; 20]); // TODO this should not be pub
+
+impl<'de> serde::de::Deserialize<'de> for ID {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct Visitor;
+
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = [u8; 20];
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("byte string")
+            }
+            fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(v.try_into().unwrap())
+            }
+        }
+        Ok(ID(deserializer.deserialize_byte_buf(Visitor {})?))
+    }
+}
 
 impl ID {
     pub fn new(id_array: [u8; 20]) -> Self {

@@ -1,5 +1,6 @@
 pub mod config;
 pub mod constants;
+pub mod dht;
 pub mod metainfo;
 pub mod peer;
 pub mod peer_connection;
@@ -7,19 +8,24 @@ pub mod peer_message;
 pub mod tracker;
 pub mod util;
 
-use core::time;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-
 use anyhow::Result;
 use constants::ID_LEN;
+use core::time;
+use dht::routing_table::RoutingTable;
+use peer::Peers;
 use peer_connection::{
     command::{Command, CommandType},
     info::PeerConnectionInfo,
     PeerConnection,
 };
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::{atomic::AtomicU64, Arc},
+    time::Duration,
+};
+use tokio::sync::broadcast;
 use tokio::{sync::mpsc, time::sleep};
 use util::{bitmap::Bitmap, id::ID};
-// use peer::Peers;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -30,86 +36,61 @@ async fn main() -> Result<()> {
     let config = config::Config::new();
     let torrent = metainfo::from_file(&config.file);
 
-    // let peers = Peers::new(torrent.count_pieces());
+    // torrent: &Torrent,
+    // peer_id: &[u8; 20],
+    // peers: Peers,
+    // pieces_downloaded: Arc<AtomicU64>,
+    // tx: &broadcast::Sender<bool>,
 
-    // tracker::tracker_manager(&torrent, &peer_id, &peers).await;
+    // let peers = Peers::new();
+    // let pieces_downloaded = Arc::new(AtomicU64::new(0));
+    // let (tx, _) = broadcast::channel(3);
 
-    // dbg!(&tracker_responses);
+    // tracker::spawns_tracker_managers(&torrent, &peer_id, &peers, pieces_downloaded, &tx).await;
 
-    // let sa = tracker_responses[2].peers[1];
+    // sleep(Duration::from_secs(10)).await;
 
-    // dbg!(&torrent.info_hash);
+    // let _ = tx.send(false);
 
-    // let mut stream = peer::initiate_handshake(&sa, &torrent.info_hash, &peer_id).await?;
+    // sleep(Duration::from_secs(300)).await;
 
-    // let message = peer_message::Message::Interested;
+    // let peer_ip = Ipv4Addr::new(5, 135, 157, 164);
+    // let peer_port = 51413;
 
-    // stream.write_all(message.into_bytes()?.as_ref()).await?;
+    // let peer_sa = SocketAddr::new(IpAddr::V4(peer_ip), peer_port);
+    // // let peer_sa = peers.get_random().unwrap();
 
-    // let ten_millis = time::Duration::from_millis(1000);
+    // let info = PeerConnectionInfo::new();
 
-    // sleep(time::Duration::from_secs(1000)).await;
+    // let pieces = Bitmap::new(torrent.info.number_of_pieces() as u32);
 
-    // struct X {
-    //     a: i32,
-    //     b: i32,
+    // let (tx, rx) = mpsc::channel(32);
+
+    // let pc = PeerConnection::new(
+    //     peer_id,
+    //     peer_sa,
+    //     ID(torrent.info_hash),
+    //     info,
+    //     torrent.info.piece_length as u32,
+    //     pieces,
+    //     tx,
+    //     rx,
+    // );
+
+    // loop {
+    //     let (command, rx) = Command::new(CommandType::Request(0));
+    //     if let Ok(_) = pc.command_sender.send(command).await {
+    //         match rx.await {
+    //             Ok(r) => {
+    //                 println!("rx in main: {r}");
+    //             }
+    //             Err(e) => {
+    //                 println!("rx.err in main: {e}");
+    //             }
+    //         }
+    //     }
+    //     sleep(time::Duration::from_secs(1000)).await;
     // }
 
-    // async fn x(n: &mut i32) {
-    //     println!("{}", n);
-    // }
-
-    // let xx = X { a: 1, b: 2 };
-
-    // select! {
-    //     rv = x(&mut xx.a) => {rv},
-    //     rv = x(&mut xx.b) => {rv},
-    // };
-
-    // let info_hash = ID([
-    //     0x3b, 0x24, 0x55, 0x04, 0xcf, 0x5f, 0x11, 0xbb, 0xdb, 0xe1, 0x20, 0x1c, 0xea, 0x6a, 0x6b,
-    //     0xf4, 0x5a, 0xee, 0x1b, 0xc0,
-    // ]);
-
-    // let peer_ip = Ipv4Addr::new(185, 255, 237, 37);
-    // let peer_port = 48536;
-
-    let peer_ip = Ipv4Addr::new(5, 135, 157, 164);
-    let peer_port = 51413;
-
-    let peer_sa = SocketAddr::new(IpAddr::V4(peer_ip), peer_port);
-
-    let info = PeerConnectionInfo::new();
-
-    let pieces = Bitmap::new(torrent.info.number_of_pieces() as u32);
-
-    let (tx, rx) = mpsc::channel(32);
-
-    let pc = PeerConnection::new(
-        peer_id,
-        peer_sa,
-        ID(torrent.info_hash),
-        info,
-        torrent.info.piece_length as u32,
-        pieces,
-        tx,
-        rx,
-    );
-
-    loop {
-        let (command, rx) = Command::new(CommandType::Request(0));
-        if let Ok(_) = pc.command_sender.send(command).await {
-            match rx.await {
-                Ok(r) => {
-                    println!("rx in main: {r}");
-                }
-                Err(e) => {
-                    println!("rx.err in main: {e}");
-                }
-            }
-        }
-        sleep(time::Duration::from_secs(1000)).await;
-    }
-
-    // Ok(())
+    Ok(())
 }
