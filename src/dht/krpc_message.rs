@@ -97,11 +97,14 @@ pub enum ValuesOrNodes {
     Nodes { nodes: Nodes },
 }
 
-#[derive(Debug, PartialEq)]
-pub struct Token<'a>(&'a [u8]);
-
 #[derive(Debug, PartialEq, Eq)]
 pub struct Peer(SocketAddrV4);
+
+#[derive(Debug)]
+pub enum Nodes {
+    Exact(Node),
+    Closest(Vec<Node>),
+}
 
 #[derive(Debug)]
 pub struct Node {
@@ -109,16 +112,17 @@ pub struct Node {
     addr: SocketAddrV4,
 }
 
-// #[serde(untagged)]
-#[derive(Debug)]
-pub enum Nodes {
-    Exact(Node),
-    Closest(Vec<Node>),
-}
-
 impl Peer {
     fn from_compact_bytes(buff: &[u8]) -> Result<Self> {
-        Ok(Peer(socketaddr_from_compact_bytes(buff)?))
+        if buff.len() == SIX {
+            Ok(Peer(socketaddr_from_compact_bytes(buff)?))
+        } else {
+            bail!(
+                "Peer::from_compact buff size is {}, expected {}",
+                buff.len(),
+                SIX
+            )
+        }
     }
 }
 
@@ -141,6 +145,21 @@ impl Node {
     }
 }
 
+impl Serialize for Peer {
+    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut v = Vec::new();
+
+        v.extend_from_slice(&self.0.ip().octets());
+        v.push((self.0.port() >> 8) as u8);
+        v.push((self.0.port() & 0xff) as u8);
+
+        s.serialize_bytes(&v)
+    }
+}
+
 impl<'de> Deserialize<'de> for Peer {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -152,8 +171,9 @@ impl<'de> Deserialize<'de> for Peer {
             type Value = Peer;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("Compact IP-address/port info")
+                formatter.write_str("Compact <ip=4><port=2> bytes")
             }
+
             fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
             where
                 E: serde::de::Error,
@@ -162,82 +182,6 @@ impl<'de> Deserialize<'de> for Peer {
                     Peer::from_compact_bytes(v).map_err(serde::de::Error::custom)
                 } else {
                     Err(serde::de::Error::invalid_length(v.len(), &self))
-                }
-            }
-        }
-
-        Ok(deserializer.deserialize_byte_buf(Visitor {})?)
-    }
-}
-
-impl<'de> Deserialize<'de> for Node {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct Visitor;
-
-        impl<'de> serde::de::Visitor<'de> for Visitor {
-            type Value = Node;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("byte string")
-            }
-            fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                if v.len() == T26IX {
-                    Node::from_compact_bytes(v).map_err(serde::de::Error::custom)
-                } else {
-                    Err(serde::de::Error::invalid_length(v.len(), &self))
-                }
-            }
-        }
-
-        Ok(deserializer.deserialize_byte_buf(Visitor {})?)
-    }
-}
-
-impl<'de> Deserialize<'de> for Nodes {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct Visitor;
-
-        impl<'de> serde::de::Visitor<'de> for Visitor {
-            type Value = Nodes;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("byte string")
-            }
-
-            fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                if v.len() % T26IX != 0 {
-                    Err(serde::de::Error::invalid_length(
-                        v.len(),
-                        &format!("k*{}", T26IX).as_str(),
-                    ))
-                } else {
-                    if v.len() / T26IX == 1 {
-                        let node = Node::from_compact_bytes(v).map_err(serde::de::Error::custom)?;
-                        Ok(Nodes::Exact(node))
-                    } else {
-                        let mut vec = Vec::with_capacity(v.len() / T26IX);
-
-                        for chunk in v.chunks(T26IX) {
-                            vec.push(
-                                Node::from_compact_bytes(chunk)
-                                    .map_err(serde::de::Error::custom)?,
-                            )
-                        }
-
-                        Ok(Nodes::Closest(vec))
-                    }
                 }
             }
         }
@@ -274,23 +218,98 @@ impl Serialize for Nodes {
     }
 }
 
-impl Serialize for Peer {
-    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
+impl<'de> Deserialize<'de> for Nodes {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
-        S: Serializer,
+        D: Deserializer<'de>,
     {
-        let mut v = Vec::new();
+        struct Visitor;
 
-        v.extend_from_slice(&self.0.ip().octets());
-        v.push((self.0.port() >> 8) as u8);
-        v.push((self.0.port() & 0xff) as u8);
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = Nodes;
 
-        s.serialize_bytes(&v)
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("Compact <id=20><ip=4><port=2> bytes")
+            }
+
+            fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                if v.len() % T26IX != 0 {
+                    Err(serde::de::Error::invalid_length(
+                        v.len(),
+                        &format!("k*{}", T26IX).as_str(),
+                    ))
+                } else {
+                    if v.len() / T26IX == 1 {
+                        let node = Node::from_compact_bytes(v).map_err(serde::de::Error::custom)?;
+                        Ok(Nodes::Exact(node))
+                    } else {
+                        let mut vec = Vec::with_capacity(v.len() / T26IX);
+
+                        for chunk in v.chunks(T26IX) {
+                            vec.push(
+                                Node::from_compact_bytes(chunk)
+                                    .map_err(serde::de::Error::custom)?,
+                            )
+                        }
+
+                        Ok(Nodes::Closest(vec))
+                    }
+                }
+            }
+        }
+
+        Ok(deserializer.deserialize_byte_buf(Visitor {})?)
     }
 }
 
 #[cfg(test)]
 mod krpc_tests {
+    use crate::{dht::krpc_message::Node, util::id::ID};
+
+    use super::Peer;
+
+    #[test]
+    fn peer_from_compact() {
+        let data = "yhf5aa".as_bytes();
+        let result = Peer::from_compact_bytes(data);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().0.to_string(), "121.104.102.53:24929");
+
+        let long_data = "yhf5aa++".as_bytes();
+        let result = Peer::from_compact_bytes(long_data);
+        assert!(result.is_err());
+
+        let short_data = "yhf".as_bytes();
+        let result = Peer::from_compact_bytes(short_data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn node_from_compact() {
+        let data = "qwertyuiopasdfghjklzyhf5aa".as_bytes();
+        let result = Node::from_compact_bytes(data);
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.addr.to_string(), "121.104.102.53:24929");
+        assert_eq!(
+            result.id,
+            ID([
+                b'q', b'w', b'e', b'r', b't', b'y', b'u', b'i', b'o', b'p', b'a', b's', b'd', b'f',
+                b'g', b'h', b'j', b'k', b'l', b'z'
+            ])
+        );
+
+        let long_data = "qwertyuiopasdfghjklzyhf5aayhf5aa++".as_bytes();
+        let result = Node::from_compact_bytes(long_data);
+        assert!(result.is_err());
+
+        let short_data = "yhf".as_bytes();
+        let result = Node::from_compact_bytes(short_data);
+        assert!(result.is_err());
+    }
 
     mod encode {
         use super::super::Message;
@@ -364,7 +383,7 @@ mod krpc_tests {
         }
 
         #[test]
-        fn find_nodes_resp() {
+        fn find_nodes_resp_closest() {
             let data = Message::Response {
                 transaction_id: "aa",
                 msg_type: "r",
@@ -384,6 +403,28 @@ mod krpc_tests {
             assert_eq!(
                 bendy::serde::to_bytes(&data).unwrap(),
                 "d1:rd2:id20:0123456789abcdefghij5:nodes78:rdYAxWC9Zi!A97zKJUbH9HVcgP7Z5cQScmZcC4M2hYKy!JrcYPtT9^jy^pm8sZQy3dukB$CF9^o@ofe1:t2:aa1:y1:re".as_bytes()
+            );
+        }
+
+        #[test]
+        fn find_nodes_resp_exact() {
+            let data = Message::Response {
+                transaction_id: "aa",
+                msg_type: "r",
+                response: Response::FindNode {
+                    id: ID([
+                        48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 97, 98, 99, 100, 101, 102, 103,
+                        104, 105, 106,
+                    ]),
+                    nodes: Nodes::Exact(
+                        Node::from_compact_bytes("rdYAxWC9Zi!A97zKJUbH9HVcgP".as_bytes()).unwrap(),
+                    ),
+                },
+            };
+
+            assert_eq!(
+                bendy::serde::to_bytes(&data).unwrap(),
+                "d1:rd2:id20:0123456789abcdefghij5:nodes26:rdYAxWC9Zi!A97zKJUbH9HVcgPe1:t2:aa1:y1:re".as_bytes()
             );
         }
 
@@ -649,7 +690,7 @@ mod krpc_tests {
         }
 
         #[test]
-        fn find_nodes_resp() {
+        fn find_nodes_resp_closest() {
             let raw_data =
                 "d1:rd2:id20:0123456789abcdefghij5:nodes78:rdYAxWC9Zi!A97zKJUbH9HVcgP7Z5cQScmZcC4M2hYKy!JrcYPtT9^jy^pm8sZQy3dukB$CF9^o@ofe1:t2:aa1:y1:re".as_bytes();
             let data = bendy::serde::from_bytes::<Message>(raw_data).unwrap();
@@ -685,6 +726,53 @@ mod krpc_tests {
                             ])
                         );
                         assert_eq!(Ok(node_list[2].addr), "57.94.111.64:28518".parse())
+                    } else {
+                        assert!(false);
+                    }
+                } else {
+                    assert!(false);
+                }
+            } else {
+                assert!(false);
+            }
+        }
+
+        #[test]
+        fn find_nodes_resp_exact() {
+            let raw_data =
+                "d1:rd2:id20:0123456789abcdefghij5:nodes26:rdYAxWC9Zi!A97zKJUbH9HVcgPe1:t2:aa1:y1:re".as_bytes();
+            let data = bendy::serde::from_bytes::<Message>(raw_data).unwrap();
+
+            assert!(matches!(data, Message::Response { .. }));
+            if let Message::Response {
+                transaction_id: t,
+                msg_type: y,
+                response: r,
+            } = data
+            {
+                assert_eq!(t, "aa");
+                assert_eq!(y, "r");
+
+                assert!(matches!(r, Response::FindNode { .. }));
+                if let Response::FindNode { id, nodes } = r {
+                    assert_eq!(
+                        ID([
+                            48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 97, 98, 99, 100, 101, 102, 103,
+                            104, 105, 106
+                        ]),
+                        id
+                    );
+
+                    assert!(matches!(nodes, Nodes::Exact { .. }));
+                    if let Nodes::Exact(node) = nodes {
+                        assert_eq!(
+                            node.id,
+                            ID([
+                                b'r', b'd', b'Y', b'A', b'x', b'W', b'C', b'9', b'Z', b'i', b'!',
+                                b'A', b'9', b'7', b'z', b'K', b'J', b'U', b'b', b'H'
+                            ])
+                        );
+                        assert_eq!(node.addr, "57.72.86.99:26448".parse().unwrap())
                     } else {
                         assert!(false);
                     }
