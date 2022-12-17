@@ -1,13 +1,15 @@
-use serde::{Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
     cmp::Ordering,
     ops::{BitXor, Sub},
 };
 
-#[derive(Debug, Clone, Hash, Serialize)]
-pub struct ID(pub [u8; 20]); // TODO this should not be pub
+use crate::constants::ID_LEN;
 
-impl<'de> serde::de::Deserialize<'de> for ID {
+#[derive(Debug, Clone, Hash)]
+pub struct ID(pub [u8; ID_LEN]); // TODO this should not be pub
+
+impl<'de> Deserialize<'de> for ID {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -15,7 +17,7 @@ impl<'de> serde::de::Deserialize<'de> for ID {
         struct Visitor;
 
         impl<'de> serde::de::Visitor<'de> for Visitor {
-            type Value = [u8; 20];
+            type Value = [u8; ID_LEN];
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
                 formatter.write_str("byte string")
@@ -31,8 +33,17 @@ impl<'de> serde::de::Deserialize<'de> for ID {
     }
 }
 
+impl Serialize for ID {
+    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        s.serialize_bytes(&self.0)
+    }
+}
+
 impl ID {
-    pub fn new(id_array: [u8; 20]) -> Self {
+    pub fn new(id_array: [u8; ID_LEN]) -> Self {
         Self(id_array)
     }
 
@@ -43,6 +54,10 @@ impl ID {
         let bit_filter = 0b1000_0000u8 >> bit_offset;
 
         bit_filter & self.0[byte_idx] > 0
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0.as_ref()
     }
 }
 
@@ -82,7 +97,7 @@ impl BitXor for ID {
     type Output = Self;
 
     fn bitxor(self, rhs: Self) -> Self::Output {
-        let mut rv = [0 as u8; 20];
+        let mut rv = [0 as u8; ID_LEN];
 
         for i in 0..self.0.len() {
             rv[i] = self.0[i] ^ rhs.0[i];
