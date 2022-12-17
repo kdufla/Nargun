@@ -1,7 +1,7 @@
 use anyhow::Result;
 use bendy::decoding::{FromBencode, Object};
 use bendy::encoding::AsString;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddrV4;
 
 use crate::constants::SIX;
 use crate::util::functions::socketaddr_from_compact_bytes;
@@ -14,7 +14,7 @@ pub struct Response {
     pub tracker_id: Option<String>,
     pub complete: u64,
     pub incomplete: u64,
-    pub peers: Vec<SocketAddr>,
+    pub peers: Vec<SocketAddrV4>,
 }
 
 impl FromBencode for Response {
@@ -83,7 +83,7 @@ impl FromBencode for Response {
 
 #[cfg(test)]
 mod tests {
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::net::{Ipv4Addr, SocketAddrV4};
 
     use anyhow::anyhow;
     use bendy::decoding::{Decoder, FromBencode};
@@ -126,27 +126,27 @@ mod tests {
         assert_eq!(response.incomplete, 1);
         assert_eq!(
             response.peers[0],
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0x9f, 0x45, 0x41, 0x9d)), 6887)
+            SocketAddrV4::new(Ipv4Addr::new(0x9f, 0x45, 0x41, 0x9d), 6887)
         );
         assert_eq!(
             response.peers[1],
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0x9f, 0x45, 0x41, 0x9d)), 65138)
+            SocketAddrV4::new(Ipv4Addr::new(0x9f, 0x45, 0x41, 0x9d), 65138)
         );
         assert_eq!(
             response.peers[2],
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0x9f, 0x45, 0x41, 0x9d)), 51312)
+            SocketAddrV4::new(Ipv4Addr::new(0x9f, 0x45, 0x41, 0x9d), 51312)
         );
         assert_eq!(
             response.peers[3],
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0x9f, 0x45, 0x41, 0x9d)), 43812)
+            SocketAddrV4::new(Ipv4Addr::new(0x9f, 0x45, 0x41, 0x9d), 43812)
         );
         assert_eq!(
             response.peers[4],
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0x9f, 0x45, 0x41, 0x9d)), 19639)
+            SocketAddrV4::new(Ipv4Addr::new(0x9f, 0x45, 0x41, 0x9d), 19639)
         );
         assert_eq!(
             response.peers[5],
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0x9f, 0x45, 0x41, 0x9d)), 14082)
+            SocketAddrV4::new(Ipv4Addr::new(0x9f, 0x45, 0x41, 0x9d), 14082)
         );
     }
 }

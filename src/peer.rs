@@ -1,6 +1,6 @@
 use std::collections::hash_map::Entry::Vacant;
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::SocketAddrV4;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Instant;
 
@@ -18,7 +18,7 @@ struct PeerEntry {
 
 #[derive(Clone)]
 pub struct Peers {
-    data: Arc<StdMutex<HashMap<SocketAddr, PeerEntry>>>,
+    data: Arc<StdMutex<HashMap<SocketAddrV4, PeerEntry>>>,
 }
 
 impl Peers {
@@ -28,7 +28,7 @@ impl Peers {
         }
     }
 
-    pub fn get_random(&self) -> Option<SocketAddr> {
+    pub fn get_random(&self) -> Option<SocketAddrV4> {
         let mut data = self.data.lock().unwrap();
 
         let no_or_min_time_entry = data.iter_mut().min_by(|x, y| {
@@ -45,7 +45,7 @@ impl Peers {
         }
     }
 
-    pub fn closed(&self, sa: &SocketAddr, reason: InactivenessReason) {
+    pub fn closed(&self, sa: &SocketAddrV4, reason: InactivenessReason) {
         let mut data = self.data.lock().unwrap();
 
         if let Some(entry) = data.get_mut(sa) {
@@ -55,7 +55,7 @@ impl Peers {
         } // TODO else should be impossible
     }
 
-    pub fn insert_list(&self, list: &Vec<SocketAddr>) {
+    pub fn insert_list(&self, list: &Vec<SocketAddrV4>) {
         let mut data = self.data.lock().unwrap();
 
         for socket_address in list {

@@ -1,6 +1,6 @@
 use std::{
     fmt::Display,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{Ipv4Addr, SocketAddrV4},
 };
 
 use anyhow::{bail, Result};
@@ -21,10 +21,10 @@ pub fn vec_to_id(v: Vec<u8>) -> ID {
     ID(v.try_into().unwrap())
 }
 
-pub fn socketaddr_from_compact_bytes(buff: &[u8]) -> Result<SocketAddr> {
+pub fn socketaddr_from_compact_bytes(buff: &[u8]) -> Result<SocketAddrV4> {
     match buff.len() {
-        SIX => Ok(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(buff[0], buff[1], buff[2], buff[3])),
+        SIX => Ok(SocketAddrV4::new(
+            Ipv4Addr::new(buff[0], buff[1], buff[2], buff[3]),
             ((buff[4] as u16) << 8) | buff[5] as u16,
         )),
         _ => bail!(
