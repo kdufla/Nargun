@@ -11,7 +11,7 @@ pub mod util;
 use anyhow::Result;
 use constants::ID_LEN;
 use core::time;
-use dht::routing_table::RoutingTable;
+use dht::{dht, routing_table::RoutingTable};
 use peer::Peers;
 use peer_connection::{
     command::{Command, CommandType},
@@ -19,7 +19,7 @@ use peer_connection::{
     PeerConnection,
 };
 use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
     sync::{atomic::AtomicU64, Arc},
     time::Duration,
 };
@@ -42,7 +42,10 @@ async fn main() -> Result<()> {
     // pieces_downloaded: Arc<AtomicU64>,
     // tx: &broadcast::Sender<bool>,
 
-    // let peers = Peers::new();
+    let peers = Peers::new();
+    let (tx, rx) = mpsc::channel(12);
+
+    dht(peers, ID(torrent.info_hash.clone()), rx).await;
     // let pieces_downloaded = Arc::new(AtomicU64::new(0));
     // let (tx, _) = broadcast::channel(3);
 

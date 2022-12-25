@@ -1,3 +1,4 @@
+use rand::{seq::IteratorRandom, thread_rng};
 use std::collections::hash_map::Entry::Vacant;
 use std::collections::HashMap;
 use std::net::SocketAddrV4;
@@ -67,5 +68,9 @@ impl Peers {
                 });
             }
         }
+    }
+
+    pub fn peer_addresses(&self) -> Vec<SocketAddrV4> {
+        self.data.lock().unwrap().keys().cloned().collect()
     }
 }
