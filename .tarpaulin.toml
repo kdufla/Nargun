@@ -1,0 +1,4 @@
+# out = "Lcov" does not work.. run 'cargo tarpaulin --out Lcov' for now
+[no-clean]
+skip-clean = true
+target-dir = "target/tarpaulin"
