@@ -93,7 +93,7 @@ async fn process_incoming_command(
                     ValuesOrNodes::Values { values: sample }
                 }
                 None => {
-                    let Some(nodes) = routing_table.find_remote_node(&info_hash) else {
+                    let Some(nodes) = routing_table.find_node(&info_hash) else {
                         return Err(anyhow!("can't find nodes"));
                     };
 
@@ -120,7 +120,7 @@ async fn try_find_node(
     from: SocketAddrV4,
     tid: String,
 ) -> Result<()> {
-    let Some(nodes) = routing_table.find_remote_node(&target) else {
+    let Some(nodes) = routing_table.find_node(&target) else {
         return Err(anyhow!("can't find nodes"));
     };
 

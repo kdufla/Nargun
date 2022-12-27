@@ -1,4 +1,4 @@
-use super::routing_table::RemoteNode;
+use super::routing_table::Node;
 use crate::{
     constants::{SIX, T26IX},
     util::{functions::socketaddr_from_compact_bytes, id::ID},
@@ -101,8 +101,8 @@ pub struct Peer(SocketAddrV4);
 
 #[derive(Debug)]
 pub enum Nodes {
-    Exact(RemoteNode),
-    Closest(Vec<RemoteNode>),
+    Exact(Node),
+    Closest(Vec<Node>),
 }
 
 impl Message {
@@ -320,7 +320,7 @@ impl<'de> Deserialize<'de> for Peer {
 }
 
 impl Nodes {
-    pub fn iter(&self) -> impl Iterator<Item = &RemoteNode> {
+    pub fn iter(&self) -> impl Iterator<Item = &Node> {
         NodesIter { data: self, idx: 0 }
     }
 }
@@ -331,7 +331,7 @@ struct NodesIter<'a> {
 }
 
 impl<'a> Iterator for NodesIter<'a> {
-    type Item = &'a RemoteNode;
+    type Item = &'a Node;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.data {
@@ -409,16 +409,14 @@ impl<'de> Deserialize<'de> for Nodes {
                 }
 
                 if number_of_nodes == 1 {
-                    let node =
-                        RemoteNode::from_compact_bytes(v).map_err(serde::de::Error::custom)?;
+                    let node = Node::from_compact_bytes(v).map_err(serde::de::Error::custom)?;
                     Ok(Nodes::Exact(node))
                 } else {
                     let mut nodes = Vec::with_capacity(number_of_nodes);
 
                     for raw_node in v.chunks(T26IX) {
                         nodes.push(
-                            RemoteNode::from_compact_bytes(raw_node)
-                                .map_err(serde::de::Error::custom)?,
+                            Node::from_compact_bytes(raw_node).map_err(serde::de::Error::custom)?,
                         )
                     }
 
@@ -433,7 +431,7 @@ impl<'de> Deserialize<'de> for Nodes {
 
 #[cfg(test)]
 mod krpc_tests {
-    use crate::{dht::routing_table::RemoteNode, util::id::ID};
+    use crate::{dht::routing_table::Node, util::id::ID};
 
     use super::Peer;
 
@@ -456,7 +454,7 @@ mod krpc_tests {
     #[test]
     fn node_from_compact() {
         let data = "qwertyuiopasdfghjklzyhf5aa".as_bytes();
-        let result = RemoteNode::from_compact_bytes(data);
+        let result = Node::from_compact_bytes(data);
         assert!(result.is_ok());
         let result = result.unwrap();
         assert_eq!(result.addr.to_string(), "121.104.102.53:24929");
@@ -469,11 +467,11 @@ mod krpc_tests {
         );
 
         let long_data = "qwertyuiopasdfghjklzyhf5aayhf5aa++".as_bytes();
-        let result = RemoteNode::from_compact_bytes(long_data);
+        let result = Node::from_compact_bytes(long_data);
         assert!(result.is_err());
 
         let short_data = "yhf".as_bytes();
-        let result = RemoteNode::from_compact_bytes(short_data);
+        let result = Node::from_compact_bytes(short_data);
         assert!(result.is_err());
     }
 
@@ -482,7 +480,7 @@ mod krpc_tests {
         use crate::{
             dht::{
                 krpc_message::{Arguments, Error, Nodes, Peer, Response, ValuesOrNodes},
-                routing_table::RemoteNode,
+                routing_table::Node,
             },
             util::id::ID,
         };
@@ -562,12 +560,9 @@ mod krpc_tests {
                         104, 105, 106,
                     ]),
                     nodes: Nodes::Closest(vec![
-                        RemoteNode::from_compact_bytes("rdYAxWC9Zi!A97zKJUbH9HVcgP".as_bytes())
-                            .unwrap(),
-                        RemoteNode::from_compact_bytes("7Z5cQScmZcC4M2hYKy!JrcYPtT".as_bytes())
-                            .unwrap(),
-                        RemoteNode::from_compact_bytes("9^jy^pm8sZQy3dukB$CF9^o@of".as_bytes())
-                            .unwrap(),
+                        Node::from_compact_bytes("rdYAxWC9Zi!A97zKJUbH9HVcgP".as_bytes()).unwrap(),
+                        Node::from_compact_bytes("7Z5cQScmZcC4M2hYKy!JrcYPtT".as_bytes()).unwrap(),
+                        Node::from_compact_bytes("9^jy^pm8sZQy3dukB$CF9^o@of".as_bytes()).unwrap(),
                     ]),
                 },
             };
@@ -589,8 +584,7 @@ mod krpc_tests {
                         104, 105, 106,
                     ]),
                     nodes: Nodes::Exact(
-                        RemoteNode::from_compact_bytes("rdYAxWC9Zi!A97zKJUbH9HVcgP".as_bytes())
-                            .unwrap(),
+                        Node::from_compact_bytes("rdYAxWC9Zi!A97zKJUbH9HVcgP".as_bytes()).unwrap(),
                     ),
                 },
             };
@@ -670,11 +664,11 @@ mod krpc_tests {
                     token: "aoeusnth".to_string(),
                     values_or_nodes: ValuesOrNodes::Nodes {
                         nodes: Nodes::Closest(vec![
-                            RemoteNode::from_compact_bytes("rdYAxWC9Zi!A97zKJUbH9HVcgP".as_bytes())
+                            Node::from_compact_bytes("rdYAxWC9Zi!A97zKJUbH9HVcgP".as_bytes())
                                 .unwrap(),
-                            RemoteNode::from_compact_bytes("7Z5cQScmZcC4M2hYKy!JrcYPtT".as_bytes())
+                            Node::from_compact_bytes("7Z5cQScmZcC4M2hYKy!JrcYPtT".as_bytes())
                                 .unwrap(),
-                            RemoteNode::from_compact_bytes("9^jy^pm8sZQy3dukB$CF9^o@of".as_bytes())
+                            Node::from_compact_bytes("9^jy^pm8sZQy3dukB$CF9^o@of".as_bytes())
                                 .unwrap(),
                         ]),
                     },

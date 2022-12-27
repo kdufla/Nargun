@@ -1,11 +1,10 @@
+use crate::constants::ID_LEN;
 use openssl::sha;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
     cmp::Ordering,
     ops::{BitXor, Sub},
 };
-
-use crate::constants::ID_LEN;
 
 #[derive(Debug, Clone, Hash)]
 pub struct ID(pub [u8; ID_LEN]); // TODO this should not be pub
@@ -87,6 +86,14 @@ impl ID {
         Ordering::Equal
     }
 
+    pub fn left_or_right_by_depth<T>(&self, depth: usize, left: T, right: T) -> T {
+        if self.get_bit(depth) {
+            right
+        } else {
+            left
+        }
+    }
+
     pub fn hash_with_secret(&self, secret: &[u8]) -> Self {
         let mut hasher = sha::Sha1::new();
         hasher.update(self.as_bytes());
@@ -157,9 +164,7 @@ impl<'a, 'b> Sub<&'b ID> for &'a ID {
 mod id_tests {
     use std::cmp::Ordering;
 
-    use crate::constants::ID_LEN;
-
-    use super::ID;
+    use super::{ID, ID_LEN};
 
     #[test]
     fn create() {

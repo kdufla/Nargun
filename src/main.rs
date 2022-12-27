@@ -10,7 +10,6 @@ pub mod util;
 
 use anyhow::Result;
 use constants::ID_LEN;
-use core::time;
 use dht::{dht, routing_table::RoutingTable};
 use peer::Peers;
 use peer_connection::{
@@ -30,8 +29,7 @@ use util::{bitmap::Bitmap, id::ID};
 #[tokio::main]
 async fn main() -> Result<()> {
     // env::set_var("RUST_BACKTRACE", "1");
-    let _peer_id: [u8; ID_LEN] = rand::random();
-    let peer_id = ID(_peer_id);
+    let peer_id = ID(rand::random());
 
     let config = config::Config::new();
     let torrent = metainfo::from_file(&config.file);
