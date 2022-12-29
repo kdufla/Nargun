@@ -1,10 +1,12 @@
 use super::routing_table::Node;
 use crate::{
     constants::{SIX, T26IX},
+    peer_message::SerializableBytes,
     util::{functions::socketaddr_from_compact_bytes, id::ID},
 };
 use anyhow::{anyhow, bail, Result};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use bytes::Bytes;
+use serde::{de::Unexpected, Deserialize, Deserializer, Serialize, Serializer};
 use std::net::SocketAddrV4;
 use std::str;
 
@@ -13,9 +15,9 @@ use std::str;
 pub enum Message {
     Query {
         #[serde(rename = "t")]
-        transaction_id: String,
+        transaction_id: SerializableBytes,
         #[serde(rename = "y")]
-        msg_type: String,
+        msg_type: MessageType,
         #[serde(rename = "q")]
         method_name: String,
         #[serde(rename = "a")]
@@ -23,17 +25,17 @@ pub enum Message {
     },
     Response {
         #[serde(rename = "t")]
-        transaction_id: String,
+        transaction_id: SerializableBytes,
         #[serde(rename = "y")]
-        msg_type: String,
+        msg_type: MessageType,
         #[serde(rename = "r")]
         response: Response,
     },
     Error {
         #[serde(rename = "t")]
-        transaction_id: String,
+        transaction_id: SerializableBytes,
         #[serde(rename = "y")]
-        msg_type: String,
+        msg_type: MessageType,
         #[serde(rename = "e")]
         error: Vec<Error>,
     },
@@ -46,7 +48,7 @@ pub enum Arguments {
         id: ID,
         info_hash: ID,
         port: u16,
-        token: String,
+        token: SerializableBytes,
     },
     FindNode {
         id: ID,
@@ -66,7 +68,7 @@ pub enum Arguments {
 pub enum Response {
     GetPeers {
         id: ID,
-        token: String,
+        token: SerializableBytes,
         #[serde(flatten)]
         values_or_nodes: ValuesOrNodes,
     },
@@ -105,6 +107,8 @@ pub enum Nodes {
     Closest(Vec<Node>),
 }
 
+pub type TID = [u8; 5];
+
 impl Message {
     pub fn to_bytes(self) -> Result<Vec<u8>> {
         bendy::serde::to_bytes(&self).map_err(|e| anyhow!("{}", e))
@@ -114,7 +118,7 @@ impl Message {
         bendy::serde::from_bytes::<Message>(buf).map_err(|e| anyhow!("{}", e))
     }
 
-    pub fn get_tid(&self) -> String {
+    pub fn get_tid(&self) -> Bytes {
         match self {
             Message::Query {
                 transaction_id,
@@ -133,41 +137,39 @@ impl Message {
                 error: _,
             } => transaction_id,
         }
-        .clone()
+        .as_bytes()
     }
 
-    pub fn ping_query(id: &ID) -> (String, Self) {
-        let tid: [u8; 2] = rand::random();
-        let tid = str::from_utf8(&tid).unwrap().to_owned();
+    pub fn ping_query(id: &ID) -> (Bytes, Self) {
+        let transaction_id = Bytes::from(Vec::from(rand::random::<TID>()));
 
         (
-            tid.clone(),
+            transaction_id.clone(),
             Message::Query {
-                transaction_id: tid,
-                msg_type: "q".to_string(),
+                transaction_id: SerializableBytes::new(transaction_id),
+                msg_type: MessageType(b'q'),
                 method_name: "ping".to_string(),
                 arguments: Arguments::Ping { id: id.clone() },
             },
         )
     }
 
-    pub fn ping_resp(id: &ID, transaction_id: String) -> Self {
+    pub fn ping_resp(id: &ID, transaction_id: Bytes) -> Self {
         Message::Response {
-            transaction_id,
-            msg_type: "r".to_string(),
+            transaction_id: SerializableBytes::new(transaction_id),
+            msg_type: MessageType(b'r'),
             response: Response::Ping { id: id.clone() },
         }
     }
 
-    pub fn find_nodes_query(id: &ID, target: ID) -> (String, Self) {
-        let tid: [u8; 2] = rand::random();
-        let tid = str::from_utf8(&tid).unwrap().to_owned();
+    pub fn find_nodes_query(id: &ID, target: ID) -> (Bytes, Self) {
+        let transaction_id = Bytes::from(Vec::from(rand::random::<TID>()));
 
         (
-            tid.clone(),
+            transaction_id.clone(),
             Message::Query {
-                transaction_id: tid,
-                msg_type: "q".to_string(),
+                transaction_id: SerializableBytes::new(transaction_id),
+                msg_type: MessageType(b'q'),
                 method_name: "find_node".to_string(),
                 arguments: Arguments::FindNode {
                     id: id.clone(),
@@ -177,10 +179,10 @@ impl Message {
         )
     }
 
-    pub fn find_nodes_resp(id: &ID, nodes: Nodes, transaction_id: String) -> Self {
+    pub fn find_nodes_resp(id: &ID, nodes: Nodes, transaction_id: Bytes) -> Self {
         Message::Response {
-            transaction_id,
-            msg_type: "r".to_string(),
+            transaction_id: SerializableBytes::new(transaction_id),
+            msg_type: MessageType(b'r'),
             response: Response::FindNode {
                 id: id.clone(),
                 nodes,
@@ -188,15 +190,14 @@ impl Message {
         }
     }
 
-    pub fn get_peers_query(id: &ID, info_hash: ID) -> (String, Self) {
-        let tid: [u8; 2] = rand::random();
-        let tid = str::from_utf8(&tid).unwrap().to_owned();
+    pub fn get_peers_query(id: &ID, info_hash: ID) -> (Bytes, Self) {
+        let transaction_id = Bytes::from(Vec::from(rand::random::<TID>()));
 
         (
-            tid.clone(),
+            transaction_id.clone(),
             Message::Query {
-                transaction_id: tid,
-                msg_type: "q".to_string(),
+                transaction_id: SerializableBytes::new(transaction_id),
+                msg_type: MessageType(b'q'),
                 method_name: "get_peers".to_string(),
                 arguments: Arguments::GetPeers {
                     id: id.clone(),
@@ -208,45 +209,44 @@ impl Message {
 
     pub fn get_peers_resp(
         id: &ID,
-        token: String,
+        token: Bytes,
         values_or_nodes: ValuesOrNodes,
-        transaction_id: String,
+        transaction_id: Bytes,
     ) -> Self {
         Message::Response {
-            transaction_id,
-            msg_type: "r".to_string(),
+            transaction_id: SerializableBytes::new(transaction_id),
+            msg_type: MessageType(b'r'),
             response: Response::GetPeers {
                 id: id.clone(),
-                token,
+                token: SerializableBytes::new(token),
                 values_or_nodes,
             },
         }
     }
 
-    pub fn announce_peer_query(id: &ID, info_hash: ID, port: u16, token: String) -> (String, Self) {
-        let tid: [u8; 2] = rand::random();
-        let tid = str::from_utf8(&tid).unwrap().to_owned();
+    pub fn announce_peer_query(id: &ID, info_hash: ID, port: u16, token: Bytes) -> (Bytes, Self) {
+        let transaction_id = Bytes::from(Vec::from(rand::random::<TID>()));
 
         (
-            tid.clone(),
+            transaction_id.clone(),
             Message::Query {
-                transaction_id: tid,
-                msg_type: "q".to_string(),
+                transaction_id: SerializableBytes::new(transaction_id),
+                msg_type: MessageType(b'q'),
                 method_name: "announce_peer".to_string(),
                 arguments: Arguments::AnnouncePeer {
                     id: id.clone(),
                     info_hash,
                     port,
-                    token,
+                    token: SerializableBytes::new(token),
                 },
             },
         )
     }
 
-    pub fn announce_peer_resp(id: &ID, transaction_id: String) -> Self {
+    pub fn announce_peer_resp(id: &ID, transaction_id: Bytes) -> Self {
         Message::Response {
-            transaction_id,
-            msg_type: "r".to_string(),
+            transaction_id: SerializableBytes::new(transaction_id),
+            msg_type: MessageType(b'r'),
             response: Response::Ping { id: id.clone() },
         }
     }
@@ -311,6 +311,58 @@ impl<'de> Deserialize<'de> for Peer {
                     Peer::from_compact_bytes(v).map_err(serde::de::Error::custom)
                 } else {
                     Err(serde::de::Error::invalid_length(v.len(), &self))
+                }
+            }
+        }
+
+        Ok(deserializer.deserialize_byte_buf(Visitor {})?)
+    }
+}
+
+#[derive(Debug)]
+pub struct MessageType(u8);
+
+impl Serialize for MessageType {
+    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self.0 {
+            b'q' => s.serialize_str("q"),
+            b'r' => s.serialize_str("r"),
+            _ => s.serialize_str("e"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for MessageType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct Visitor;
+
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = MessageType;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("q/r/e")
+            }
+
+            fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                if v.len() != 1 {
+                    return Err(serde::de::Error::invalid_length(v.len(), &self));
+                }
+
+                match v[0] {
+                    b'q' | b'r' | b'e' => Ok(MessageType(v[0])),
+                    _ => Err(serde::de::Error::invalid_value(
+                        Unexpected::Char(v[0] as char),
+                        &self,
+                    )),
                 }
             }
         }
@@ -476,21 +528,27 @@ mod krpc_tests {
     }
 
     mod encode {
+        use bytes::Bytes;
+
         use super::super::Message;
         use crate::{
             dht::{
-                krpc_message::{Arguments, Error, Nodes, Peer, Response, ValuesOrNodes},
+                krpc_message::{
+                    Arguments, Error, MessageType, Nodes, Peer, Response, ValuesOrNodes,
+                },
                 routing_table::Node,
             },
+            peer_message::SerializableBytes,
             util::id::ID,
         };
         use std::net::{Ipv4Addr, SocketAddrV4};
 
         #[test]
         fn ping_query() {
+            let transaction_id = Bytes::from_static(b"aa");
             let data = Message::Query {
-                transaction_id: "aa".to_string(),
-                msg_type: "q".to_string(),
+                transaction_id: SerializableBytes::new(transaction_id),
+                msg_type: MessageType(b'q'),
                 method_name: "ping".to_string(),
                 arguments: Arguments::Ping {
                     id: ID([
@@ -508,9 +566,10 @@ mod krpc_tests {
 
         #[test]
         fn ping_resp() {
+            let transaction_id = Bytes::from_static(b"aa");
             let data = Message::Response {
-                transaction_id: "aa".to_string(),
-                msg_type: "r".to_string(),
+                transaction_id: SerializableBytes::new(transaction_id),
+                msg_type: MessageType(b'r'),
                 response: Response::Ping {
                     id: ID([
                         109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 49,
@@ -527,9 +586,10 @@ mod krpc_tests {
 
         #[test]
         fn find_nodes_query() {
+            let transaction_id = Bytes::from_static(b"aa");
             let data = Message::Query {
-                transaction_id: "aa".to_string(),
-                msg_type: "q".to_string(),
+                transaction_id: SerializableBytes::new(transaction_id),
+                msg_type: MessageType(b'q'),
                 method_name: "find_node".to_string(),
                 arguments: Arguments::FindNode {
                     id: ID([
@@ -551,9 +611,10 @@ mod krpc_tests {
 
         #[test]
         fn find_nodes_resp_closest() {
+            let transaction_id = Bytes::from_static(b"aa");
             let data = Message::Response {
-                transaction_id: "aa".to_string(),
-                msg_type: "r".to_string(),
+                transaction_id: SerializableBytes::new(transaction_id),
+                msg_type: MessageType(b'r'),
                 response: Response::FindNode {
                     id: ID([
                         48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 97, 98, 99, 100, 101, 102, 103,
@@ -575,9 +636,10 @@ mod krpc_tests {
 
         #[test]
         fn find_nodes_resp_exact() {
+            let transaction_id = Bytes::from_static(b"aa");
             let data = Message::Response {
-                transaction_id: "aa".to_string(),
-                msg_type: "r".to_string(),
+                transaction_id: SerializableBytes::new(transaction_id),
+                msg_type: MessageType(b'r'),
                 response: Response::FindNode {
                     id: ID([
                         48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 97, 98, 99, 100, 101, 102, 103,
@@ -597,9 +659,10 @@ mod krpc_tests {
 
         #[test]
         fn get_peers_query() {
+            let transaction_id = Bytes::from_static(b"aa");
             let data = Message::Query {
-                transaction_id: "aa".to_string(),
-                msg_type: "q".to_string(),
+                transaction_id: SerializableBytes::new(transaction_id),
+                msg_type: MessageType(b'q'),
                 method_name: "get_peers".to_string(),
                 arguments: Arguments::GetPeers {
                     id: ID([
@@ -621,15 +684,17 @@ mod krpc_tests {
 
         #[test]
         fn get_peers_resp_vals() {
+            let token = SerializableBytes::new(Bytes::from_static(b"aoeusnth"));
+            let transaction_id = Bytes::from_static(b"aa");
             let data = Message::Response {
-                transaction_id: "aa".to_string(),
-                msg_type: "r".to_string(),
+                transaction_id: SerializableBytes::new(transaction_id),
+                msg_type: MessageType(b'r'),
                 response: Response::GetPeers {
                     id: ID([
                         97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54,
                         55, 56, 57,
                     ]),
-                    token: "aoeusnth".to_string(),
+                    token,
                     values_or_nodes: ValuesOrNodes::Values {
                         values: vec![
                             Peer(SocketAddrV4::new(
@@ -653,15 +718,17 @@ mod krpc_tests {
 
         #[test]
         fn get_peers_resp_nodes() {
+            let token = SerializableBytes::new(Bytes::from_static(b"aoeusnth"));
+            let transaction_id = Bytes::from_static(b"aa");
             let data = Message::Response {
-                transaction_id: "aa".to_string(),
-                msg_type: "r".to_string(),
+                transaction_id: SerializableBytes::new(transaction_id),
+                msg_type: MessageType(b'r'),
                 response: Response::GetPeers {
                     id: ID([
                         97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54,
                         55, 56, 57,
                     ]),
-                    token: "aoeusnth".to_string(),
+                    token,
                     values_or_nodes: ValuesOrNodes::Nodes {
                         nodes: Nodes::Closest(vec![
                             Node::from_compact_bytes("rdYAxWC9Zi!A97zKJUbH9HVcgP".as_bytes())
@@ -683,9 +750,11 @@ mod krpc_tests {
 
         #[test]
         fn announce_peer_query() {
+            let token = SerializableBytes::new(Bytes::from_static(b"aoeusnth"));
+            let transaction_id = Bytes::from_static(b"aa");
             let data = Message::Query {
-                transaction_id: "aa".to_string(),
-                msg_type: "q".to_string(),
+                transaction_id: SerializableBytes::new(transaction_id),
+                msg_type: MessageType(b'q'),
                 method_name: "announce_peer".to_string(),
                 arguments: Arguments::AnnouncePeer {
                     id: ID([
@@ -697,7 +766,7 @@ mod krpc_tests {
                         50, 51, 52, 53, 54,
                     ]),
                     port: 6881,
-                    token: "aoeusnth".to_string(),
+                    token,
                 },
             };
 
@@ -709,9 +778,10 @@ mod krpc_tests {
 
         #[test]
         fn announce_peer_resp() {
+            let transaction_id = Bytes::from_static(b"aa");
             let data = Message::Response {
-                transaction_id: "aa".to_string(),
-                msg_type: "r".to_string(),
+                transaction_id: SerializableBytes::new(transaction_id),
+                msg_type: MessageType(b'r'),
                 response: Response::AnnouncePeer {
                     id: ID([
                         109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 49,
@@ -728,9 +798,10 @@ mod krpc_tests {
 
         #[test]
         fn error() {
+            let transaction_id = Bytes::from_static(b"aa");
             let data = Message::Error {
-                transaction_id: "aa".to_string(),
-                msg_type: "e".to_string(),
+                transaction_id: SerializableBytes::new(transaction_id),
+                msg_type: MessageType(b'e'),
                 error: vec![
                     Error::Code(201),
                     Error::Desc("A Generic Error Ocurred".to_string()),
@@ -747,6 +818,7 @@ mod krpc_tests {
         use super::super::Message;
         use crate::{
             dht::krpc_message::{Arguments, Error, Nodes, Peer, Response, ValuesOrNodes},
+            peer_message::SerializableBytes,
             util::id::ID,
         };
         use std::net::{Ipv4Addr, SocketAddrV4};
@@ -764,8 +836,8 @@ mod krpc_tests {
                 arguments: a,
             } = data
             {
-                assert_eq!(t, "aa");
-                assert_eq!(y, "q".to_string(),);
+                assert_eq!(t.into_bytes(), "aa".as_bytes());
+                assert_eq!(y.0, b'q',);
                 assert_eq!(q, "ping");
 
                 assert!(matches!(a, Arguments::Ping { .. }));
@@ -797,8 +869,8 @@ mod krpc_tests {
                 response: r,
             } = data
             {
-                assert_eq!(t, "aa");
-                assert_eq!(y, "r");
+                assert_eq!(t.into_bytes(), "aa".as_bytes());
+                assert_eq!(y.0, b'r');
 
                 assert!(matches!(r, Response::Ping { .. }));
                 if let Response::Ping { id } = r {
@@ -831,8 +903,8 @@ mod krpc_tests {
                 arguments: a,
             } = data
             {
-                assert_eq!(t, "aa");
-                assert_eq!(y, "q".to_string(),);
+                assert_eq!(t.into_bytes(), "aa".as_bytes());
+                assert_eq!(y.0, b'q',);
                 assert_eq!(q, "find_node");
 
                 assert!(matches!(a, Arguments::FindNode { .. }));
@@ -873,8 +945,8 @@ mod krpc_tests {
                 response: r,
             } = data
             {
-                assert_eq!(t, "aa");
-                assert_eq!(y, "r");
+                assert_eq!(t.into_bytes(), "aa".as_bytes());
+                assert_eq!(y.0, b'r');
 
                 assert!(matches!(r, Response::FindNode { .. }));
                 if let Response::FindNode { id, nodes } = r {
@@ -920,8 +992,8 @@ mod krpc_tests {
                 response: r,
             } = data
             {
-                assert_eq!(t, "aa");
-                assert_eq!(y, "r");
+                assert_eq!(t.into_bytes(), "aa".as_bytes());
+                assert_eq!(y.0, b'r');
 
                 assert!(matches!(r, Response::FindNode { .. }));
                 if let Response::FindNode { id, nodes } = r {
@@ -968,8 +1040,8 @@ mod krpc_tests {
                 arguments: a,
             } = data
             {
-                assert_eq!(t, "aa");
-                assert_eq!(y, "q".to_string(),);
+                assert_eq!(t.into_bytes(), "aa".as_bytes());
+                assert_eq!(y.0, b'q',);
                 assert_eq!(q, "get_peers");
 
                 assert!(matches!(a, Arguments::GetPeers { .. }));
@@ -1010,8 +1082,8 @@ mod krpc_tests {
                 response: r,
             } = data
             {
-                assert_eq!(t, "aa");
-                assert_eq!(y, "r");
+                assert_eq!(t.into_bytes(), "aa".as_bytes());
+                assert_eq!(y.0, b'r');
 
                 assert!(matches!(r, Response::GetPeers { .. }));
                 if let Response::GetPeers {
@@ -1028,7 +1100,7 @@ mod krpc_tests {
                         id
                     );
 
-                    assert_eq!(token, "aoeusnth");
+                    assert_eq!(token.into_bytes(), "aoeusnth".as_bytes());
 
                     assert!(matches!(values_or_nodes, ValuesOrNodes::Values { .. }));
                     if let ValuesOrNodes::Values { values } = values_or_nodes {
@@ -1070,8 +1142,8 @@ mod krpc_tests {
                 response: r,
             } = data
             {
-                assert_eq!(t, "aa");
-                assert_eq!(y, "r");
+                assert_eq!(t.into_bytes(), "aa".as_bytes());
+                assert_eq!(y.0, b'r');
 
                 assert!(matches!(r, Response::GetPeers { .. }));
                 if let Response::GetPeers {
@@ -1088,7 +1160,7 @@ mod krpc_tests {
                         id
                     );
 
-                    assert_eq!(token, "aoeusnth");
+                    assert_eq!(token.into_bytes(), "aoeusnth".as_bytes());
 
                     assert!(matches!(values_or_nodes, ValuesOrNodes::Nodes { .. }));
                     if let ValuesOrNodes::Nodes { nodes } = values_or_nodes {
@@ -1130,8 +1202,8 @@ mod krpc_tests {
                 arguments: a,
             } = data
             {
-                assert_eq!(t, "aa");
-                assert_eq!(y, "q".to_string(),);
+                assert_eq!(t.into_bytes(), "aa".as_bytes());
+                assert_eq!(y.0, b'q',);
                 assert_eq!(q, "announce_peer");
 
                 assert!(matches!(a, Arguments::AnnouncePeer { .. }));
@@ -1158,7 +1230,7 @@ mod krpc_tests {
                         info_hash
                     );
 
-                    assert_eq!(token, "aoeusnth");
+                    assert_eq!(token.into_bytes(), "aoeusnth".as_bytes());
 
                     assert_eq!(port, 6881);
                 } else {
@@ -1187,8 +1259,8 @@ mod krpc_tests {
                 error: e,
             } = data
             {
-                assert_eq!(t, "aa");
-                assert_eq!(y, "e");
+                assert_eq!(t.into_bytes(), "aa".as_bytes());
+                assert_eq!(y.0, b'e');
 
                 assert!(matches!(e[0], Error::Code { .. }));
                 if let Error::Code(code) = e[0] {

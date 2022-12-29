@@ -1,4 +1,5 @@
 use crate::constants::ID_LEN;
+use bytes::Bytes;
 use openssl::sha;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
@@ -94,11 +95,11 @@ impl ID {
         }
     }
 
-    pub fn hash_with_secret(&self, secret: &[u8]) -> Self {
+    pub fn hash_as_bytes(&self, secret: &[u8]) -> Bytes {
         let mut hasher = sha::Sha1::new();
         hasher.update(self.as_bytes());
         hasher.update(secret);
-        Self(hasher.finish())
+        Bytes::from(Vec::from(hasher.finish()))
     }
 
     pub fn as_bytes(&self) -> &[u8] {

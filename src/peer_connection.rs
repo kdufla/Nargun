@@ -173,7 +173,7 @@ impl PeerConnection {
                 Message::Have(piece_index) => self.pieces.set(piece_index as usize, true),
                 Message::Bitfield(bitfield) => {
                     // TODO handle error
-                    self.pieces.replace_data(bitfield.0.as_ref())?;
+                    self.pieces.replace_data(&bitfield.into_bytes())?;
                 }
                 Message::Request(_request) => (), // TODO upload
                 Message::Piece(mut piece) => {

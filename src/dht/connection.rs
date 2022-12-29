@@ -1,7 +1,8 @@
-use super::krpc_message::{Arguments, Message, Nodes, Peer, Response, ValuesOrNodes};
+use super::krpc_message::{Arguments, Message, Nodes, Peer, Response, ValuesOrNodes, TID};
 use super::DhtCommand;
 use crate::util::id::ID;
 use anyhow::Result;
+use bytes::Bytes;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::net::SocketAddrV4;
@@ -17,14 +18,14 @@ pub const MTU: usize = 1300;
 #[derive(Clone)]
 pub struct Connection {
     own_id: ID,
-    pub conn_command_tx: mpsc::Sender<Command>,
+    pub conn_command_tx: mpsc::Sender<ConCommand>,
 }
 
 impl Connection {
     pub fn new(
         own_id: ID,
-        conn_command_tx: mpsc::Sender<Command>,
-        conn_command_rx: mpsc::Receiver<Command>,
+        conn_command_tx: mpsc::Sender<ConCommand>,
+        conn_command_rx: mpsc::Receiver<ConCommand>,
         dht_command_tx: mpsc::Sender<DhtCommand>,
     ) -> Self {
         let rv = Self {
@@ -42,10 +43,10 @@ impl Connection {
 
     async fn manage_udp(
         self,
-        conn_command_rx: mpsc::Receiver<Command>,
+        conn_command_rx: mpsc::Receiver<ConCommand>,
         dht_command_tx: mpsc::Sender<DhtCommand>,
     ) {
-        let sock = UdpSocket::bind("0.0.0.0:0").await.unwrap();
+        let sock = UdpSocket::bind("0.0.0.0:46491").await.unwrap();
         let _local_addr = sock.local_addr().unwrap().port(); // TODO PORT message needs this
 
         let secret = ID(rand::random());
@@ -65,13 +66,15 @@ impl Connection {
 
     async fn manage_sender(
         &self,
-        mut conn_command_rx: mpsc::Receiver<Command>,
+        mut conn_command_rx: mpsc::Receiver<ConCommand>,
         sock: Arc<UdpSocket>,
         secret: ID,
         mut pending: PendingRequests,
     ) -> Result<()> {
         loop {
             let Some(command) = conn_command_rx.recv().await else {break};
+
+            let token = secret.hash_as_bytes(&command.target.ip().octets());
 
             let message = match command.command_type {
                 CommandType::Query(query) => {
@@ -80,9 +83,11 @@ impl Connection {
                     message
                 }
                 CommandType::Resp(resp, tid) => {
-                    self.build_resp_from_command(resp, &secret, &command.target, tid)
+                    self.build_resp_from_command(resp, &secret, &command.target, tid, token)
                 }
             };
+
+            println!("send: {:?}", &message);
 
             let message = message.to_bytes()?;
 
@@ -105,7 +110,7 @@ impl Connection {
         }
     }
 
-    fn build_query_from_command(&self, query: QueryCommand) -> (String, Message) {
+    fn build_query_from_command(&self, query: QueryCommand) -> (Bytes, Message) {
         match query {
             QueryCommand::Ping => Message::ping_query(&self.own_id),
             QueryCommand::FindNode { target } => Message::find_nodes_query(&self.own_id, target),
@@ -125,16 +130,13 @@ impl Connection {
         resp: RespCommand,
         secret: &ID,
         target: &SocketAddrV4,
-        tid: String,
+        tid: Bytes,
+        token: Bytes,
     ) -> Message {
         match resp {
             RespCommand::Ping => Message::ping_resp(&self.own_id, tid),
             RespCommand::FindNode { nodes } => Message::find_nodes_resp(&self.own_id, nodes, tid),
             RespCommand::GetPeers { v_or_n } => {
-                let token_as_id = secret.hash_with_secret(&target.ip().octets());
-                let token = std::str::from_utf8(token_as_id.as_bytes())
-                    .unwrap()
-                    .to_owned();
                 Message::get_peers_resp(&self.own_id, token, v_or_n, tid)
             }
             RespCommand::AnnouncePeer => Message::announce_peer_resp(&self.own_id, tid),
@@ -151,6 +153,8 @@ impl Connection {
 
         while let Ok((bytes_read, from_addr)) = sock.recv_from(&mut buf).await {
             let message = Message::from_bytes(&buf)?;
+            println!("rec: {:?}", &message);
+
             Self::handle_message(
                 message,
                 from_addr,
@@ -169,7 +173,7 @@ impl Connection {
         message: Message,
         from: SocketAddr,
         dht_command_tx: &mpsc::Sender<DhtCommand>,
-        conn_command_tx: &mpsc::Sender<Command>,
+        conn_command_tx: &mpsc::Sender<ConCommand>,
         pending: &PendingRequests,
         secret: &ID,
     ) {
@@ -180,14 +184,11 @@ impl Connection {
         match message {
             Message::Query {
                 transaction_id,
-                msg_type,
-                method_name,
                 arguments,
+                ..
             } => {
                 Self::handle_query(
-                    transaction_id,
-                    msg_type,
-                    method_name,
+                    transaction_id.into_bytes(),
                     arguments,
                     from,
                     conn_command_tx,
@@ -198,12 +199,11 @@ impl Connection {
             }
             Message::Response {
                 transaction_id,
-                msg_type,
                 response,
+                ..
             } => {
                 Self::handle_resp(
-                    transaction_id,
-                    msg_type,
+                    transaction_id.into_bytes(),
                     response,
                     from,
                     conn_command_tx,
@@ -221,19 +221,17 @@ impl Connection {
     }
 
     async fn handle_query(
-        transaction_id: String,
-        msg_type: String,
-        method_name: String,
+        transaction_id: Bytes,
         arguments: Arguments,
         from: SocketAddrV4,
-        conn_command_tx: &mpsc::Sender<Command>,
+        conn_command_tx: &mpsc::Sender<ConCommand>,
         dht_command_tx: &mpsc::Sender<DhtCommand>,
         secret: &ID,
     ) {
         match arguments {
             Arguments::Ping { id } => {
                 let (command, _) =
-                    Command::new(CommandType::Resp(RespCommand::Ping, transaction_id), from);
+                    ConCommand::new(CommandType::Resp(RespCommand::Ping, transaction_id), from);
                 let _ = conn_command_tx.send(command).await;
             }
             Arguments::FindNode { id, target } => {
@@ -252,11 +250,9 @@ impl Connection {
                 port,
                 token,
             } => {
-                let token_as_id = secret.hash_with_secret(&from.ip().octets());
-                let correct_token = std::str::from_utf8(token_as_id.as_bytes())
-                    .unwrap()
-                    .to_owned();
-                if correct_token == token {
+                let correct_token = secret.hash_as_bytes(&from.ip().octets());
+
+                if correct_token == token.into_bytes() {
                     let mut peer_addr = from.clone();
                     peer_addr.set_port(port);
                     let peer = Peer::new(peer_addr);
@@ -264,7 +260,7 @@ impl Connection {
                         .send(DhtCommand::NewPeers(vec![peer], info_hash.to_owned()))
                         .await;
 
-                    let (command, _) = Command::new(
+                    let (command, _) = ConCommand::new(
                         CommandType::Resp(RespCommand::AnnouncePeer, transaction_id),
                         from,
                     );
@@ -275,11 +271,10 @@ impl Connection {
     }
 
     async fn handle_resp(
-        transaction_id: String,
-        msg_type: String,
+        transaction_id: Bytes,
         response: Response,
         from: SocketAddrV4,
-        conn_command_tx: &mpsc::Sender<Command>,
+        conn_command_tx: &mpsc::Sender<ConCommand>,
         dht_command_tx: &mpsc::Sender<DhtCommand>,
         pending: &PendingRequests,
     ) {
@@ -340,7 +335,7 @@ impl Connection {
 #[derive(Debug)]
 pub enum CommandType {
     Query(QueryCommand),
-    Resp(RespCommand, String),
+    Resp(RespCommand, Bytes),
 }
 
 #[derive(Debug)]
@@ -355,7 +350,7 @@ pub enum QueryCommand {
     AnnouncePeer {
         info_hash: ID,
         port: u16,
-        token: String,
+        token: Bytes,
     },
 }
 
@@ -368,13 +363,13 @@ pub enum RespCommand {
 }
 
 #[derive(Debug)]
-pub struct Command {
+pub struct ConCommand {
     pub command_type: CommandType,
     pub target: SocketAddrV4,
     pub response_channel: oneshot::Sender<u64>,
 }
 
-impl Command {
+impl ConCommand {
     pub fn new(command: CommandType, target: SocketAddrV4) -> (Self, oneshot::Receiver<u64>) {
         let (tx, rx) = oneshot::channel();
         (
@@ -397,18 +392,18 @@ enum RequestType {
 }
 
 #[derive(Clone)]
-struct PendingRequests(Arc<Mutex<HashMap<String, RequestType>>>);
+struct PendingRequests(Arc<Mutex<HashMap<Bytes, RequestType>>>);
 
 impl PendingRequests {
     pub fn new() -> Self {
-        Self(Arc::new(Mutex::new(HashMap::<String, RequestType>::new())))
+        Self(Arc::new(Mutex::new(HashMap::<Bytes, RequestType>::new())))
     }
 
-    pub fn get(&self, k: &String) -> Option<RequestType> {
+    pub fn get(&self, k: &Bytes) -> Option<RequestType> {
         self.0.lock().unwrap().get(k).cloned()
     }
 
-    pub fn insert(&mut self, k: String, v: RequestType) -> Option<RequestType> {
+    pub fn insert(&mut self, k: Bytes, v: RequestType) -> Option<RequestType> {
         self.0.lock().unwrap().insert(k, v)
     }
 }

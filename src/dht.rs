@@ -7,8 +7,9 @@ use self::{
     krpc_message::{Nodes, Peer, ValuesOrNodes},
     routing_table::RoutingTable,
 };
-use crate::{constants::T26IX, dht::connection::Command as ConCommand, peer::Peers, util::id::ID};
+use crate::{constants::T26IX, dht::connection::ConCommand, peer::Peers, util::id::ID};
 use anyhow::{anyhow, Result};
+use bytes::Bytes;
 use rand::{seq::IteratorRandom, thread_rng};
 use std::{collections::HashMap, net::SocketAddrV4};
 use tokio::{select, sync::mpsc};
@@ -17,22 +18,22 @@ pub enum DhtCommand {
     Touch(ID, SocketAddrV4),
     NewNodes(Nodes),
     NewPeers(Vec<Peer>, ID),
-    FindNode(ID, String, SocketAddrV4),
-    GetPeers(ID, String, SocketAddrV4),
+    FindNode(ID, Bytes, SocketAddrV4),
+    GetPeers(ID, Bytes, SocketAddrV4),
 }
 
 pub async fn dht(peers: Peers, info_hash: ID, mut new_peer_with_dht: mpsc::Receiver<SocketAddrV4>) {
     let own_node_id = ID(rand::random());
 
+    let mut routing_table = RoutingTable::new(own_node_id.to_owned());
+
     let (dht_tx, mut dht_rx) = mpsc::channel(64);
     let (conn_tx, conn_rx) = mpsc::channel(64);
 
-    let mut routing_table = RoutingTable::new(own_node_id.to_owned());
+    let udp_connection =
+        Connection::new(own_node_id.to_owned(), conn_tx, conn_rx, dht_tx.to_owned());
 
-    let udp_connection = Connection::new(own_node_id.to_owned(), conn_tx, conn_rx, dht_tx);
-
-    let mut peer_map = HashMap::new();
-    let _ = peer_map.insert(info_hash.to_owned(), peers.peer_addresses());
+    let mut peer_map = HashMap::from([(info_hash.to_owned(), peers.peer_addresses())]);
 
     loop {
         let x = select! {
@@ -118,7 +119,7 @@ async fn try_find_node(
     routing_table: &mut RoutingTable,
     target: &ID,
     from: SocketAddrV4,
-    tid: String,
+    tid: Bytes,
 ) -> Result<()> {
     let Some(nodes) = routing_table.find_node(&target) else {
         return Err(anyhow!("can't find nodes"));

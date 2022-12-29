@@ -2,32 +2,61 @@ use anyhow::Result;
 use bincode::Options;
 use bytes::Bytes;
 use serde::ser::SerializeTuple;
-use serde::ser::Serializer;
-use serde::Serialize;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::mem::size_of;
 use tokio::io::AsyncReadExt;
 use tokio::io::ReadHalf;
 use tokio::net::TcpStream;
 
 #[derive(Debug)]
-pub struct SerializableBytes(pub Bytes);
+pub struct SerializableBytes(Bytes);
 
 impl SerializableBytes {
     pub fn new(data: Bytes) -> SerializableBytes {
         SerializableBytes(data)
     }
+
+    pub fn into_bytes(self) -> Bytes {
+        self.0
+    }
+
+    pub fn as_bytes(&self) -> Bytes {
+        self.0.clone()
+    }
 }
 
-impl serde::Serialize for SerializableBytes {
+impl Serialize for SerializableBytes {
     fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
     where
-        S: serde::Serializer,
+        S: Serializer,
     {
-        let mut tuple = s.serialize_tuple(self.0.len())?;
-        for byte in self.0.iter() {
-            tuple.serialize_element(byte)?;
+        s.serialize_bytes(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for SerializableBytes {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct Visitor;
+
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = SerializableBytes;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("Compact <ip=4><port=2> bytes")
+            }
+
+            fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(SerializableBytes(Bytes::from(Vec::from(v))))
+            }
         }
-        tuple.end()
+
+        Ok(deserializer.deserialize_byte_buf(Visitor {})?)
     }
 }
 

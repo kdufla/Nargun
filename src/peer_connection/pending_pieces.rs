@@ -122,7 +122,7 @@ impl PendingPieces {
             );
 
             if chunks.0.len() > block_idx && chunks.0.is_pending(block_idx) {
-                chunks.0.set_downloaded(block_idx, piece.block.0.clone());
+                chunks.0.set_downloaded(block_idx, piece.block.as_bytes());
 
                 return Ok(chunks.0.remaining());
             }

@@ -10,6 +10,7 @@ pub mod util;
 
 use anyhow::Result;
 use constants::ID_LEN;
+use core::time;
 use dht::{dht, routing_table::RoutingTable};
 use peer::Peers;
 use peer_connection::{
@@ -34,6 +35,8 @@ async fn main() -> Result<()> {
     let config = config::Config::new();
     let torrent = metainfo::from_file(&config.file);
 
+    // let addr: SocketAddrV4 = "79.7.28.179:64728".parse().unwrap();
+    let addr: SocketAddrV4 = "77.254.210.215:36028".parse().unwrap();
     // torrent: &Torrent,
     // peer_id: &[u8; 20],
     // peers: Peers,
@@ -43,7 +46,11 @@ async fn main() -> Result<()> {
     let peers = Peers::new();
     let (tx, rx) = mpsc::channel(12);
 
-    dht(peers, ID(torrent.info_hash.clone()), rx).await;
+    tokio::spawn(async move {
+        dht(peers, ID(torrent.info_hash.clone()), rx).await;
+    });
+
+    tx.send(addr).await;
     // let pieces_downloaded = Arc::new(AtomicU64::new(0));
     // let (tx, _) = broadcast::channel(3);
 
@@ -90,8 +97,8 @@ async fn main() -> Result<()> {
     //             }
     //         }
     //     }
-    //     sleep(time::Duration::from_secs(1000)).await;
     // }
+    sleep(time::Duration::from_secs(1000)).await;
 
     Ok(())
 }
