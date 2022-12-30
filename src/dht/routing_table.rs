@@ -52,6 +52,14 @@ impl RoutingTable {
         self.get_closest_nodes(id, bucket)
     }
 
+    pub fn iter_over_arbitrary_id_in_each_non_full_range(&self) -> impl Iterator<Item = ID> + '_ {
+        RTIter {
+            data: self,
+            depth: 0,
+            idx: 0,
+        }
+    }
+
     fn get_closest_nodes<'a>(&'a self, id: &ID, mut bucket: &'a Bucket) -> Option<Nodes> {
         let mut closest = Vec::with_capacity(16);
         let mut prev_depth = usize::MAX;
@@ -352,6 +360,50 @@ impl PartialEq for Node {
     }
 }
 
+struct RTIter<'a> {
+    data: &'a RoutingTable,
+    idx: usize,
+    depth: usize,
+}
+
+impl<'a> Iterator for RTIter<'a> {
+    type Item = ID;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut rv = self.data.own_id.to_owned();
+        loop {
+            if self.depth >= 160 {
+                return None;
+            }
+
+            match &self.data.data[self.idx] {
+                TreeNode::Parent(left_child_idx, right_child_idx) => {
+                    self.idx = self.data.own_id.left_or_right_by_depth(
+                        self.depth,
+                        *left_child_idx,
+                        *right_child_idx,
+                    );
+
+                    rv.flip_bit(self.depth);
+                    self.depth += 1;
+                }
+                TreeNode::Leaf(_) => {
+                    rv = self.data.own_id.to_owned();
+                    self.depth = 160;
+                }
+            }
+
+            let bucket = &self.data.get_bucket(&rv);
+
+            if bucket.iter_over_goods().count() < 8 {
+                break;
+            }
+        }
+
+        Some(rv)
+    }
+}
+
 #[cfg(test)]
 mod routing_table_tests {
     use std::net::SocketAddrV4;
@@ -519,5 +571,60 @@ mod routing_table_tests {
         };
 
         assert!(&target_id - &closest[0].id < &target_id - &closest[1].id);
+    }
+
+    macro_rules! zero_id_with_first {
+        ($first:expr) => {
+            ID([
+                $first, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            ])
+        };
+    }
+
+    #[test]
+    fn iterator() {
+        let mut rt = RoutingTable::new(ID(rand::random()));
+        let (_, addr) = random_node();
+
+        let ids = [
+            zero_id_with_first!(0b0000_0000),
+            zero_id_with_first!(0b0001_0000),
+            zero_id_with_first!(0b0010_0000),
+            zero_id_with_first!(0b0011_0000),
+            zero_id_with_first!(0b1000_0000),
+            zero_id_with_first!(0b1001_0000),
+            zero_id_with_first!(0b1010_0000),
+            zero_id_with_first!(0b1011_0000),
+            zero_id_with_first!(0b1100_0000),
+            zero_id_with_first!(0b1101_0000),
+            zero_id_with_first!(0b1110_0000),
+        ];
+
+        for id in ids {
+            rt.insert_good(id.to_owned(), addr.to_owned());
+        }
+
+        assert_eq!(
+            rt.iter_over_arbitrary_id_in_each_non_full_range().count(),
+            2
+        );
+
+        rt.insert_good(zero_id_with_first!(0b1111_0000), addr.to_owned());
+
+        assert_eq!(
+            rt.iter_over_arbitrary_id_in_each_non_full_range().count(),
+            1
+        );
+
+        rt.insert_good(zero_id_with_first!(0b1000_0001), addr.to_owned());
+
+        assert_eq!(
+            rt.iter_over_arbitrary_id_in_each_non_full_range().count(),
+            if rt.own_id.as_bytes()[0] & 0b1000_0000 > 0 {
+                3
+            } else {
+                1
+            }
+        );
     }
 }

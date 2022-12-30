@@ -3,7 +3,7 @@ pub mod krpc_message;
 pub mod routing_table;
 
 use self::{
-    connection::{Connection, RespCommand, MTU},
+    connection::{CommandType, Connection, QueryCommand, RespCommand, MTU},
     krpc_message::{Nodes, Peer, ValuesOrNodes},
     routing_table::RoutingTable,
 };
@@ -11,8 +11,10 @@ use crate::{constants::T26IX, dht::connection::ConCommand, peer::Peers, util::id
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use rand::{seq::IteratorRandom, thread_rng};
-use std::{collections::HashMap, net::SocketAddrV4};
-use tokio::{select, sync::mpsc};
+use std::{collections::HashMap, net::SocketAddrV4, time::Duration};
+use tokio::{select, sync::mpsc, time::sleep};
+
+const MAX_FETCH_SLEEP: u64 = 60;
 
 pub enum DhtCommand {
     Touch(ID, SocketAddrV4),
@@ -20,6 +22,7 @@ pub enum DhtCommand {
     NewPeers(Vec<Peer>, ID),
     FindNode(ID, Bytes, SocketAddrV4),
     GetPeers(ID, Bytes, SocketAddrV4),
+    FetchNodes,
 }
 
 pub async fn dht(peers: Peers, info_hash: ID, mut new_peer_with_dht: mpsc::Receiver<SocketAddrV4>) {
@@ -34,6 +37,10 @@ pub async fn dht(peers: Peers, info_hash: ID, mut new_peer_with_dht: mpsc::Recei
         Connection::new(own_node_id.to_owned(), conn_tx, conn_rx, dht_tx.to_owned());
 
     let mut peer_map = HashMap::from([(info_hash.to_owned(), peers.peer_addresses())]);
+
+    tokio::spawn(async move {
+        periodically_fetch_nodes(dht_tx).await;
+    });
 
     loop {
         let x = select! {
@@ -109,6 +116,7 @@ async fn process_incoming_command(
 
             connection.conn_command_tx.send(command).await?
         }
+        DhtCommand::FetchNodes => fetch_nodes(routing_table, connection).await,
     }
 
     Ok(())
@@ -147,4 +155,47 @@ async fn ping_node(connection: &Connection, addr: SocketAddrV4) {
     );
 
     let _ = connection.conn_command_tx.send(command).await;
+}
+
+async fn fetch_nodes(routing_table: &mut RoutingTable, connection: &Connection) {
+    for id in routing_table.iter_over_arbitrary_id_in_each_non_full_range() {
+        let node = match routing_table.find_node(&id) {
+            Some(nodes) => match nodes {
+                Nodes::Exact(exact_node) => exact_node,
+                Nodes::Closest(closest_nodes) => match closest_nodes.into_iter().next() {
+                    Some(node) => node,
+                    None => continue,
+                },
+            },
+            None => continue,
+        };
+
+        let (command, _) = ConCommand::new(
+            CommandType::Query(QueryCommand::FindNode { target: id }),
+            node.addr,
+        );
+
+        connection.conn_command_tx.send(command).await;
+    }
+}
+
+async fn periodically_fetch_nodes(dht_command_tx: mpsc::Sender<DhtCommand>) {
+    let growth_formula = |x: u64| {
+        let x = x as f64;
+        let y = 10.0 + 3.4 * x.powf(0.65);
+        y as u64
+    };
+
+    for i in 1..u64::MAX {
+        dht_command_tx.send(DhtCommand::FetchNodes).await;
+
+        let seconds_to_sleep = growth_formula(i);
+        let seconds_to_sleep = if seconds_to_sleep < MAX_FETCH_SLEEP {
+            seconds_to_sleep
+        } else {
+            MAX_FETCH_SLEEP
+        };
+
+        sleep(Duration::from_secs(seconds_to_sleep)).await;
+    }
 }
