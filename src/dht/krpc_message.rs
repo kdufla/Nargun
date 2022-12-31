@@ -10,6 +10,7 @@ use serde::{de::Unexpected, Deserialize, Deserializer, Serialize, Serializer};
 use std::net::SocketAddrV4;
 use std::str;
 
+// TODO fuck bendy! it's the worst decision I've made. I need to impl my own parser for serde.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum Message {
@@ -250,6 +251,14 @@ impl Message {
             response: Response::Ping { id: id.clone() },
         }
     }
+
+    pub fn error_resp(error: Vec<Error>, transaction_id: Bytes) -> Self {
+        Message::Error {
+            transaction_id: SerializableBytes::new(transaction_id),
+            msg_type: MessageType(b'e'),
+            error,
+        }
+    }
 }
 
 impl Peer {
@@ -487,6 +496,21 @@ mod krpc_tests {
 
     use super::Peer;
 
+    macro_rules! encoded_with_custom_tid {
+        ($start:expr, $tid:expr) => {{
+            let mut encoded = $start.as_bytes().to_vec();
+
+            encoded.push(0x30 + $tid.len() as u8);
+            encoded.push(b':');
+            for b in $tid {
+                encoded.push(b);
+            }
+
+            encoded.extend_from_slice("1:y1:qe".as_bytes());
+            encoded
+        }};
+    }
+
     #[test]
     fn peer_from_compact() {
         let data = "yhf5aa".as_bytes();
@@ -533,292 +557,240 @@ mod krpc_tests {
         use super::super::Message;
         use crate::{
             dht::{
-                krpc_message::{
-                    Arguments, Error, MessageType, Nodes, Peer, Response, ValuesOrNodes,
-                },
+                krpc_message::{Error, Nodes, Peer, ValuesOrNodes},
                 routing_table::Node,
             },
-            peer_message::SerializableBytes,
             util::id::ID,
         };
         use std::net::{Ipv4Addr, SocketAddrV4};
 
         #[test]
         fn ping_query() {
-            let transaction_id = Bytes::from_static(b"aa");
-            let data = Message::Query {
-                transaction_id: SerializableBytes::new(transaction_id),
-                msg_type: MessageType(b'q'),
-                method_name: "ping".to_string(),
-                arguments: Arguments::Ping {
-                    id: ID([
-                        97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54,
-                        55, 56, 57,
-                    ]),
-                },
-            };
+            let (tid, message) = Message::ping_query(&ID([
+                97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54, 55, 56,
+                57,
+            ]));
 
             assert_eq!(
-                bendy::serde::to_bytes(&data).unwrap(),
-                "d1:ad2:id20:abcdefghij0123456789e1:q4:ping1:t2:aa1:y1:qe".as_bytes()
+                bendy::serde::to_bytes(&message).unwrap(),
+                encoded_with_custom_tid!("d1:ad2:id20:abcdefghij0123456789e1:q4:ping1:t", tid)
             );
         }
 
         #[test]
         fn ping_resp() {
-            let transaction_id = Bytes::from_static(b"aa");
-            let data = Message::Response {
-                transaction_id: SerializableBytes::new(transaction_id),
-                msg_type: MessageType(b'r'),
-                response: Response::Ping {
-                    id: ID([
-                        109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 49,
-                        50, 51, 52, 53, 54,
-                    ]),
-                },
-            };
+            let message = Message::ping_resp(
+                &ID([
+                    109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 49, 50,
+                    51, 52, 53, 54,
+                ]),
+                Bytes::from_static(b"aa"),
+            );
 
             assert_eq!(
-                bendy::serde::to_bytes(&data).unwrap(),
+                bendy::serde::to_bytes(&message).unwrap(),
                 "d1:rd2:id20:mnopqrstuvwxyz123456e1:t2:aa1:y1:re".as_bytes()
             );
         }
 
         #[test]
         fn find_nodes_query() {
-            let transaction_id = Bytes::from_static(b"aa");
-            let data = Message::Query {
-                transaction_id: SerializableBytes::new(transaction_id),
-                msg_type: MessageType(b'q'),
-                method_name: "find_node".to_string(),
-                arguments: Arguments::FindNode {
-                    id: ID([
-                        97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54,
-                        55, 56, 57,
-                    ]),
-                    target: ID([
-                        109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 49,
-                        50, 51, 52, 53, 54,
-                    ]),
-                },
-            };
+            let (tid, message) = Message::find_nodes_query(
+                &ID([
+                    97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54, 55,
+                    56, 57,
+                ]),
+                ID([
+                    109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 49, 50,
+                    51, 52, 53, 54,
+                ]),
+            );
 
             assert_eq!(
-                bendy::serde::to_bytes(&data).unwrap(),
-                "d1:ad2:id20:abcdefghij01234567896:target20:mnopqrstuvwxyz123456e1:q9:find_node1:t2:aa1:y1:qe".as_bytes()
+                bendy::serde::to_bytes(&message).unwrap(),
+                encoded_with_custom_tid!(
+                    "d1:ad2:id20:abcdefghij01234567896:target20:mnopqrstuvwxyz123456e1:q9:find_node1:t",
+                    tid
+                )
             );
         }
 
         #[test]
         fn find_nodes_resp_closest() {
-            let transaction_id = Bytes::from_static(b"aa");
-            let data = Message::Response {
-                transaction_id: SerializableBytes::new(transaction_id),
-                msg_type: MessageType(b'r'),
-                response: Response::FindNode {
-                    id: ID([
-                        48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 97, 98, 99, 100, 101, 102, 103,
-                        104, 105, 106,
-                    ]),
-                    nodes: Nodes::Closest(vec![
-                        Node::from_compact_bytes("rdYAxWC9Zi!A97zKJUbH9HVcgP".as_bytes()).unwrap(),
-                        Node::from_compact_bytes("7Z5cQScmZcC4M2hYKy!JrcYPtT".as_bytes()).unwrap(),
-                        Node::from_compact_bytes("9^jy^pm8sZQy3dukB$CF9^o@of".as_bytes()).unwrap(),
-                    ]),
-                },
-            };
+            let message = Message::find_nodes_resp(
+                &ID([
+                    48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 97, 98, 99, 100, 101, 102, 103, 104,
+                    105, 106,
+                ]),
+                Nodes::Closest(vec![
+                    Node::from_compact_bytes("rdYAxWC9Zi!A97zKJUbH9HVcgP".as_bytes()).unwrap(),
+                    Node::from_compact_bytes("7Z5cQScmZcC4M2hYKy!JrcYPtT".as_bytes()).unwrap(),
+                    Node::from_compact_bytes("9^jy^pm8sZQy3dukB$CF9^o@of".as_bytes()).unwrap(),
+                ]),
+                Bytes::from_static(b"aa"),
+            );
 
             assert_eq!(
-                bendy::serde::to_bytes(&data).unwrap(),
+                bendy::serde::to_bytes(&message).unwrap(),
                 "d1:rd2:id20:0123456789abcdefghij5:nodes78:rdYAxWC9Zi!A97zKJUbH9HVcgP7Z5cQScmZcC4M2hYKy!JrcYPtT9^jy^pm8sZQy3dukB$CF9^o@ofe1:t2:aa1:y1:re".as_bytes()
             );
         }
 
         #[test]
         fn find_nodes_resp_exact() {
-            let transaction_id = Bytes::from_static(b"aa");
-            let data = Message::Response {
-                transaction_id: SerializableBytes::new(transaction_id),
-                msg_type: MessageType(b'r'),
-                response: Response::FindNode {
-                    id: ID([
-                        48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 97, 98, 99, 100, 101, 102, 103,
-                        104, 105, 106,
-                    ]),
-                    nodes: Nodes::Exact(
-                        Node::from_compact_bytes("rdYAxWC9Zi!A97zKJUbH9HVcgP".as_bytes()).unwrap(),
-                    ),
-                },
-            };
+            let message = Message::find_nodes_resp(
+                &ID([
+                    48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 97, 98, 99, 100, 101, 102, 103, 104,
+                    105, 106,
+                ]),
+                Nodes::Exact(
+                    Node::from_compact_bytes("rdYAxWC9Zi!A97zKJUbH9HVcgP".as_bytes()).unwrap(),
+                ),
+                Bytes::from_static(b"aa"),
+            );
 
             assert_eq!(
-                bendy::serde::to_bytes(&data).unwrap(),
+                bendy::serde::to_bytes(&message).unwrap(),
                 "d1:rd2:id20:0123456789abcdefghij5:nodes26:rdYAxWC9Zi!A97zKJUbH9HVcgPe1:t2:aa1:y1:re".as_bytes()
             );
         }
 
         #[test]
         fn get_peers_query() {
-            let transaction_id = Bytes::from_static(b"aa");
-            let data = Message::Query {
-                transaction_id: SerializableBytes::new(transaction_id),
-                msg_type: MessageType(b'q'),
-                method_name: "get_peers".to_string(),
-                arguments: Arguments::GetPeers {
-                    id: ID([
-                        97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54,
-                        55, 56, 57,
-                    ]),
-                    info_hash: ID([
-                        109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 49,
-                        50, 51, 52, 53, 54,
-                    ]),
-                },
-            };
+            let (tid, message) = Message::get_peers_query(
+                &ID([
+                    97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54, 55,
+                    56, 57,
+                ]),
+                ID([
+                    109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 49, 50,
+                    51, 52, 53, 54,
+                ]),
+            );
 
             assert_eq!(
-                bendy::serde::to_bytes(&data).unwrap(),
-                "d1:ad2:id20:abcdefghij01234567899:info_hash20:mnopqrstuvwxyz123456e1:q9:get_peers1:t2:aa1:y1:qe".as_bytes()
+                bendy::serde::to_bytes(&message).unwrap(),
+                encoded_with_custom_tid!(
+                    "d1:ad2:id20:abcdefghij01234567899:info_hash20:mnopqrstuvwxyz123456e1:q9:get_peers1:t",
+                    tid
+                )
             );
         }
 
         #[test]
         fn get_peers_resp_vals() {
-            let token = SerializableBytes::new(Bytes::from_static(b"aoeusnth"));
-            let transaction_id = Bytes::from_static(b"aa");
-            let data = Message::Response {
-                transaction_id: SerializableBytes::new(transaction_id),
-                msg_type: MessageType(b'r'),
-                response: Response::GetPeers {
-                    id: ID([
-                        97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54,
-                        55, 56, 57,
-                    ]),
-                    token,
-                    values_or_nodes: ValuesOrNodes::Values {
-                        values: vec![
-                            Peer(SocketAddrV4::new(
-                                Ipv4Addr::new(b'a', b'x', b'j', b'e'),
-                                11893,
-                            )),
-                            Peer(SocketAddrV4::new(
-                                Ipv4Addr::new(b'i', b'd', b'h', b't'),
-                                28269,
-                            )),
-                        ],
-                    },
+            let message = Message::get_peers_resp(
+                &ID([
+                    97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54, 55,
+                    56, 57,
+                ]),
+                Bytes::from_static(b"aoeusnth"),
+                ValuesOrNodes::Values {
+                    values: vec![
+                        Peer(SocketAddrV4::new(
+                            Ipv4Addr::new(b'a', b'x', b'j', b'e'),
+                            11893,
+                        )),
+                        Peer(SocketAddrV4::new(
+                            Ipv4Addr::new(b'i', b'd', b'h', b't'),
+                            28269,
+                        )),
+                    ],
                 },
-            };
+                Bytes::from_static(b"aa"),
+            );
 
             assert_eq!(
-                bendy::serde::to_bytes(&data).unwrap(),
+                bendy::serde::to_bytes(&message).unwrap(),
                 "d1:rd2:id20:abcdefghij01234567895:token8:aoeusnth6:valuesl6:axje.u6:idhtnmee1:t2:aa1:y1:re".as_bytes()
             );
         }
 
         #[test]
         fn get_peers_resp_nodes() {
-            let token = SerializableBytes::new(Bytes::from_static(b"aoeusnth"));
-            let transaction_id = Bytes::from_static(b"aa");
-            let data = Message::Response {
-                transaction_id: SerializableBytes::new(transaction_id),
-                msg_type: MessageType(b'r'),
-                response: Response::GetPeers {
-                    id: ID([
-                        97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54,
-                        55, 56, 57,
+            let message = Message::get_peers_resp(
+                &ID([
+                    97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54, 55,
+                    56, 57,
+                ]),
+                Bytes::from_static(b"aoeusnth"),
+                ValuesOrNodes::Nodes {
+                    nodes: Nodes::Closest(vec![
+                        Node::from_compact_bytes("rdYAxWC9Zi!A97zKJUbH9HVcgP".as_bytes()).unwrap(),
+                        Node::from_compact_bytes("7Z5cQScmZcC4M2hYKy!JrcYPtT".as_bytes()).unwrap(),
+                        Node::from_compact_bytes("9^jy^pm8sZQy3dukB$CF9^o@of".as_bytes()).unwrap(),
                     ]),
-                    token,
-                    values_or_nodes: ValuesOrNodes::Nodes {
-                        nodes: Nodes::Closest(vec![
-                            Node::from_compact_bytes("rdYAxWC9Zi!A97zKJUbH9HVcgP".as_bytes())
-                                .unwrap(),
-                            Node::from_compact_bytes("7Z5cQScmZcC4M2hYKy!JrcYPtT".as_bytes())
-                                .unwrap(),
-                            Node::from_compact_bytes("9^jy^pm8sZQy3dukB$CF9^o@of".as_bytes())
-                                .unwrap(),
-                        ]),
-                    },
                 },
-            };
+                Bytes::from_static(b"aa"),
+            );
 
             assert_eq!(
-                bendy::serde::to_bytes(&data).unwrap(),
+                bendy::serde::to_bytes(&message).unwrap(),
                 "d1:rd2:id20:abcdefghij01234567895:nodes78:rdYAxWC9Zi!A97zKJUbH9HVcgP7Z5cQScmZcC4M2hYKy!JrcYPtT9^jy^pm8sZQy3dukB$CF9^o@of5:token8:aoeusnthe1:t2:aa1:y1:re".as_bytes()
             );
         }
 
         #[test]
         fn announce_peer_query() {
-            let token = SerializableBytes::new(Bytes::from_static(b"aoeusnth"));
-            let transaction_id = Bytes::from_static(b"aa");
-            let data = Message::Query {
-                transaction_id: SerializableBytes::new(transaction_id),
-                msg_type: MessageType(b'q'),
-                method_name: "announce_peer".to_string(),
-                arguments: Arguments::AnnouncePeer {
-                    id: ID([
-                        97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54,
-                        55, 56, 57,
-                    ]),
-                    info_hash: ID([
-                        109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 49,
-                        50, 51, 52, 53, 54,
-                    ]),
-                    port: 6881,
-                    token,
-                },
-            };
+            let (tid, message) = Message::announce_peer_query(
+                &ID([
+                    97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54, 55,
+                    56, 57,
+                ]),
+                ID([
+                    109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 49, 50,
+                    51, 52, 53, 54,
+                ]),
+                6881,
+                Bytes::from_static(b"aoeusnth"),
+            );
 
             assert_eq!(
-                bendy::serde::to_bytes(&data).unwrap(),
-                "d1:ad2:id20:abcdefghij01234567899:info_hash20:mnopqrstuvwxyz1234564:porti6881e5:token8:aoeusnthe1:q13:announce_peer1:t2:aa1:y1:qe".as_bytes()
+                bendy::serde::to_bytes(&message).unwrap(),
+                encoded_with_custom_tid!(
+                    "d1:ad2:id20:abcdefghij01234567899:info_hash20:mnopqrstuvwxyz1234564:porti6881e5:token8:aoeusnthe1:q13:announce_peer1:t",
+                    tid
+                )
             );
         }
 
         #[test]
         fn announce_peer_resp() {
-            let transaction_id = Bytes::from_static(b"aa");
-            let data = Message::Response {
-                transaction_id: SerializableBytes::new(transaction_id),
-                msg_type: MessageType(b'r'),
-                response: Response::AnnouncePeer {
-                    id: ID([
-                        109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 49,
-                        50, 51, 52, 53, 54,
-                    ]),
-                },
-            };
+            let message = Message::announce_peer_resp(
+                &ID([
+                    109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 49, 50,
+                    51, 52, 53, 54,
+                ]),
+                Bytes::from_static(b"aa"),
+            );
 
             assert_eq!(
-                bendy::serde::to_bytes(&data).unwrap(),
+                bendy::serde::to_bytes(&message).unwrap(),
                 "d1:rd2:id20:mnopqrstuvwxyz123456e1:t2:aa1:y1:re".as_bytes()
             );
         }
 
         #[test]
         fn error() {
-            let transaction_id = Bytes::from_static(b"aa");
-            let data = Message::Error {
-                transaction_id: SerializableBytes::new(transaction_id),
-                msg_type: MessageType(b'e'),
-                error: vec![
+            let message = Message::error_resp(
+                vec![
                     Error::Code(201),
                     Error::Desc("A Generic Error Ocurred".to_string()),
                 ],
-            };
+                Bytes::from_static(b"aa"),
+            );
 
             assert_eq!(
-                bendy::serde::to_bytes(&data).unwrap(),
+                bendy::serde::to_bytes(&message).unwrap(),
                 "d1:eli201e23:A Generic Error Ocurrede1:t2:aa1:y1:ee".as_bytes()
             );
         }
     }
     mod decode {
+
         use super::super::Message;
         use crate::{
             dht::krpc_message::{Arguments, Error, Nodes, Peer, Response, ValuesOrNodes},
-            peer_message::SerializableBytes,
             util::id::ID,
         };
         use std::net::{Ipv4Addr, SocketAddrV4};
