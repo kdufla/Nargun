@@ -1,23 +1,24 @@
-use rand::{seq::IteratorRandom, thread_rng};
 use std::collections::hash_map::Entry::Vacant;
 use std::collections::HashMap;
 use std::net::SocketAddrV4;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Instant;
 
+#[derive(Debug)]
 pub enum InactivenessReason {
     Unknown,
     UnableToConnect,
     ChokedForTooLong,
 }
 
+#[derive(Debug)]
 struct PeerEntry {
     active: bool,
     inactiveness_reason: InactivenessReason,
     last_connection_instant: Option<Instant>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Peers {
     data: Arc<StdMutex<HashMap<SocketAddrV4, PeerEntry>>>,
 }

@@ -4,15 +4,19 @@ use crate::util::functions::socketaddr_from_compact_bytes;
 use crate::util::id::ID;
 use anyhow::{anyhow, bail, Result};
 use std::cmp::Ordering;
+use std::fmt;
 use std::net::SocketAddrV4;
 use std::time::Duration;
 use tokio::time::Instant;
+use tracing::debug;
 
+#[derive(Debug)]
 pub struct RoutingTable {
     own_id: ID,
     data: Vec<TreeNode>,
 }
 
+#[derive(Debug)]
 enum TreeNode {
     // when a bucket is split, 1 is stored as a right child and vice versa
     Parent(usize, usize),
@@ -25,11 +29,10 @@ struct Bucket {
     data: [Option<Node>; 8],
 }
 
-#[derive(Debug, Eq, Clone)]
+#[derive(Eq, Clone)]
 pub struct Node {
     pub id: ID,
     pub addr: SocketAddrV4,
-    able_to_receive: bool,
     last_seen: Option<Instant>,
 }
 
@@ -52,7 +55,7 @@ impl RoutingTable {
         self.get_closest_nodes(id, bucket)
     }
 
-    pub fn iter_over_arbitrary_id_in_each_non_full_range(&self) -> impl Iterator<Item = ID> + '_ {
+    pub fn iter_over_ids_within_fillable_buckets(&self) -> impl Iterator<Item = ID> + '_ {
         RTIter {
             data: self,
             depth: 0,
@@ -77,9 +80,10 @@ impl RoutingTable {
 
         if closest.len() >= 1 {
             closest.sort_by(|a, b| a.cmp_by_distance_to_id(b, id));
-
+            debug!("found closest for {:?}, closest: {:?}", id, closest);
             Some(Nodes::Closest(closest))
         } else {
+            debug!("no closest nodes for {:?}", id);
             None
         }
     }
@@ -140,6 +144,8 @@ impl RoutingTable {
             return;
         }
 
+        debug!("insert {:?}", id);
+
         let own_id = self.own_id.to_owned();
         let bucket = self.get_bucket_mut(&id);
 
@@ -165,14 +171,21 @@ impl RoutingTable {
         };
 
         let bucket = self.get_bucket_at(bucket_idx).unwrap();
+        if bucket.depth == 160 {
+            return;
+        }
+
         let og_bucket_depth = bucket.depth;
         let (left, right) = bucket.split();
+
+        debug!("split bucket_idx = {:?} bucket = {:?}", bucket_idx, bucket);
+        debug!("split into {:?} {:?}", left, right);
 
         let (left_idx, right_idx) = self.push_children(bucket_idx, left, right);
         let cur_idx = id.left_or_right_by_depth(og_bucket_depth, left_idx, right_idx);
 
         let bucket = self.get_bucket_at_mut(cur_idx).unwrap();
-        if bucket.try_insert(&id, &addr).is_ok() || bucket.depth == 160 {
+        if bucket.try_insert(&id, &addr).is_ok() {
             return;
         }
 
@@ -272,7 +285,6 @@ impl Bucket {
         *elem_to_replace = Some(Node {
             id: id.to_owned(),
             addr: addr.to_owned(),
-            able_to_receive: true,
             last_seen: Some(Instant::now()),
         });
 
@@ -286,9 +298,8 @@ impl Bucket {
     fn _count_bads(&self) -> usize {
         let exists_and_is_bad = |node_opt: &Option<Node>| {
             let node = node_opt.as_ref()?;
-            let last_seen_instant = node.last_seen.as_ref()?;
-            let status_expired = last_seen_instant.elapsed() > Duration::from_secs(15 * 60);
-            (!node.able_to_receive || status_expired).then_some(())
+            let last_seen = node.last_seen.as_ref()?;
+            (last_seen.elapsed() > Duration::from_secs(15 * 60)).then_some(())
         };
 
         self.data.iter().fold(0, |acc, x| {
@@ -315,7 +326,6 @@ impl Node {
             Ok(Self {
                 id: ID(id.try_into()?),
                 addr: socketaddr_from_compact_bytes(addr)?,
-                able_to_receive: false,
                 last_seen: None,
             })
         } else {
@@ -342,7 +352,7 @@ impl Node {
         let node = node_opt.as_ref()?;
         let last_seen_instant = node.last_seen.as_ref()?;
 
-        if node.able_to_receive && (last_seen_instant.elapsed() < Duration::from_secs(15 * 60)) {
+        if last_seen_instant.elapsed() < Duration::from_secs(15 * 60) {
             Some(node)
         } else {
             None
@@ -360,6 +370,18 @@ impl PartialEq for Node {
     }
 }
 
+impl fmt::Debug for Node {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut ds = f.debug_struct("Node");
+        let beginning = ds.field("id", &self.id).field("addr", &self.addr);
+
+        match &self.last_seen {
+            Some(instant) => beginning.field("last_seen", &instant.elapsed()).finish(),
+            None => beginning.finish_non_exhaustive(),
+        }
+    }
+}
+
 struct RTIter<'a> {
     data: &'a RoutingTable,
     idx: usize,
@@ -372,7 +394,7 @@ impl<'a> Iterator for RTIter<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         let mut rv = self.data.own_id.to_owned();
         loop {
-            if self.depth >= 160 {
+            if self.depth > 160 {
                 return None;
             }
 
@@ -385,19 +407,29 @@ impl<'a> Iterator for RTIter<'a> {
                     );
 
                     rv.flip_bit(self.depth);
-                    self.depth += 1;
                 }
                 TreeNode::Leaf(_) => {
-                    rv = self.data.own_id.to_owned();
-                    self.depth = 160;
+                    if self.depth == 160 {
+                        rv = self.data.own_id.to_owned();
+                    } else {
+                        self.depth = usize::MAX;
+                        let mut rv = self.data.own_id.to_owned();
+                        rv.randomize_after_bit(self.depth);
+                        return Some(rv);
+                    }
                 }
             }
+
+            rv.randomize_after_bit(self.depth);
 
             let bucket = &self.data.get_bucket(&rv);
 
             if bucket.iter_over_goods().count() < 8 {
                 break;
             }
+
+            self.depth += 1;
+            rv = self.data.own_id.to_owned();
         }
 
         Some(rv)
@@ -407,6 +439,8 @@ impl<'a> Iterator for RTIter<'a> {
 #[cfg(test)]
 mod routing_table_tests {
     use std::net::SocketAddrV4;
+    use tracing::debug;
+    use tracing_test::traced_test;
 
     use crate::{
         constants::SIX,
@@ -443,6 +477,7 @@ mod routing_table_tests {
         assert_eq!(bucket._count_empty(), e);
     }
 
+    #[traced_test]
     #[test]
     fn basic_setup() {
         let mut rt = RoutingTable::new(ID(rand::random()));
@@ -581,16 +616,27 @@ mod routing_table_tests {
         };
     }
 
+    #[traced_test]
     #[test]
     fn iterator() {
-        let mut rt = RoutingTable::new(ID(rand::random()));
+        let mut rt = RoutingTable::new(zero_id_with_first!(0b1111_1111));
         let (_, addr) = random_node();
 
-        let ids = [
+        let left_ids = [
             zero_id_with_first!(0b0000_0000),
             zero_id_with_first!(0b0001_0000),
             zero_id_with_first!(0b0010_0000),
             zero_id_with_first!(0b0011_0000),
+            zero_id_with_first!(0b0100_0000),
+            zero_id_with_first!(0b0101_0000),
+            zero_id_with_first!(0b0110_0000),
+        ];
+
+        for id in left_ids {
+            rt.insert_good(id.to_owned(), addr.to_owned());
+        }
+
+        let right_ids = [
             zero_id_with_first!(0b1000_0000),
             zero_id_with_first!(0b1001_0000),
             zero_id_with_first!(0b1010_0000),
@@ -600,31 +646,51 @@ mod routing_table_tests {
             zero_id_with_first!(0b1110_0000),
         ];
 
-        for id in ids {
+        for id in right_ids {
             rt.insert_good(id.to_owned(), addr.to_owned());
         }
 
-        assert_eq!(
-            rt.iter_over_arbitrary_id_in_each_non_full_range().count(),
-            2
-        );
+        {
+            assert_eq!(2, rt.iter_over_ids_within_fillable_buckets().count());
+            let mut iter = rt.iter_over_ids_within_fillable_buckets();
+            let left = iter.next().unwrap();
+            let right = iter.next().unwrap();
+            assert!(!left.get_bit(0));
+            assert!(right.get_bit(0));
+        }
+
+        rt.insert_good(zero_id_with_first!(0b0111_0000), addr.to_owned());
+
+        {
+            assert_eq!(1, rt.iter_over_ids_within_fillable_buckets().count());
+            let mut iter = rt.iter_over_ids_within_fillable_buckets();
+            let right = iter.next().unwrap();
+            assert!(right.get_bit(0));
+        }
 
         rt.insert_good(zero_id_with_first!(0b1111_0000), addr.to_owned());
 
-        assert_eq!(
-            rt.iter_over_arbitrary_id_in_each_non_full_range().count(),
-            1
-        );
+        {
+            assert_eq!(1, rt.iter_over_ids_within_fillable_buckets().count());
+            let mut iter = rt.iter_over_ids_within_fillable_buckets();
+            let right = iter.next().unwrap();
+            assert!(right.get_bit(0));
+        }
 
         rt.insert_good(zero_id_with_first!(0b1000_0001), addr.to_owned());
 
-        assert_eq!(
-            rt.iter_over_arbitrary_id_in_each_non_full_range().count(),
-            if rt.own_id.as_bytes()[0] & 0b1000_0000 > 0 {
-                3
-            } else {
-                1
-            }
-        );
+        {
+            debug!(?rt);
+            assert_eq!(2, rt.iter_over_ids_within_fillable_buckets().count());
+            let mut iter = rt.iter_over_ids_within_fillable_buckets();
+
+            let right_left = iter.next().unwrap();
+            assert!(right_left.get_bit(0));
+            assert!(!right_left.get_bit(1));
+
+            let right_right = iter.next().unwrap();
+            assert!(right_right.get_bit(0));
+            assert!(right_right.get_bit(1));
+        }
     }
 }

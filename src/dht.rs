@@ -13,9 +13,11 @@ use bytes::Bytes;
 use rand::{seq::IteratorRandom, thread_rng};
 use std::{collections::HashMap, net::SocketAddrV4, time::Duration};
 use tokio::{select, sync::mpsc, time::sleep};
+use tracing::{debug, error};
 
 const MAX_FETCH_SLEEP: u64 = 60;
 
+#[derive(Debug)]
 pub enum DhtCommand {
     Touch(ID, SocketAddrV4),
     NewNodes(Nodes),
@@ -43,10 +45,16 @@ pub async fn dht(peers: Peers, info_hash: ID, mut new_peer_with_dht: mpsc::Recei
     });
 
     loop {
-        let x = select! {
+        match select! {
             addr = new_peer_with_dht.recv() => try_ping_node(&udp_connection, addr).await,
             command = dht_rx.recv() => process_incoming_command(command, &mut routing_table, &udp_connection, &peers, &mut peer_map, &own_node_id).await,
-        };
+        } {
+            Ok(_) => debug!(
+                "command handled\nrouting_table = {:?}\npeer_map = {:?}",
+                routing_table, peer_map
+            ),
+            Err(e) => error!("dht command failed. e = {:?}", e),
+        }
     }
 }
 
@@ -59,8 +67,10 @@ async fn process_incoming_command(
     own_id: &ID,
 ) -> Result<()> {
     let Some(command)  = command else{
-        return Err(anyhow!("connection closed"));
+        return Err(anyhow!("DhtCommand is None"));
     };
+
+    debug!("incoming command = {:?}", command);
 
     match command {
         DhtCommand::Touch(id, addr) => routing_table.touch_node(id, addr),
@@ -77,12 +87,10 @@ async fn process_incoming_command(
                 peers.insert_list(&addr_list);
             }
 
-            match peer_map.get_mut(&info_hash) {
-                Some(peers) => peers.append(&mut addr_list),
-                None => {
-                    let _ = peer_map.insert(info_hash, addr_list);
-                }
-            }
+            peer_map
+                .entry(info_hash)
+                .and_modify(|stored_peers| stored_peers.append(&mut addr_list))
+                .or_insert(addr_list);
         }
         DhtCommand::FindNode(target, tid, from) => {
             try_find_node(connection, routing_table, &target, from, tid).await?
@@ -142,6 +150,7 @@ async fn try_find_node(
 }
 
 async fn try_ping_node(connection: &Connection, addr: Option<SocketAddrV4>) -> Result<()> {
+    debug!("try ping {:?}", addr);
     match addr {
         Some(addr) => Ok(ping_node(connection, addr).await),
         None => Err(anyhow!("missing addr. hint: connection might be closed")),
@@ -158,7 +167,8 @@ async fn ping_node(connection: &Connection, addr: SocketAddrV4) {
 }
 
 async fn fetch_nodes(routing_table: &mut RoutingTable, connection: &Connection) {
-    for id in routing_table.iter_over_arbitrary_id_in_each_non_full_range() {
+    for id in routing_table.iter_over_ids_within_fillable_buckets() {
+        debug!("fetch_nodes for {:?}", id);
         let node = match routing_table.find_node(&id) {
             Some(nodes) => match nodes {
                 Nodes::Exact(exact_node) => exact_node,
@@ -186,8 +196,11 @@ async fn periodically_fetch_nodes(dht_command_tx: mpsc::Sender<DhtCommand>) {
         y as u64
     };
 
-    for i in 1..u64::MAX {
-        dht_command_tx.send(DhtCommand::FetchNodes).await;
+    for i in 0..u64::MAX {
+        match dht_command_tx.send(DhtCommand::FetchNodes).await {
+            Ok(_) => debug!("\n\n\n\n\n\n\n\n\n\nfetch"),
+            Err(e) => error!("periodical fetch failed {:?}", e),
+        };
 
         let seconds_to_sleep = growth_formula(i);
         let seconds_to_sleep = if seconds_to_sleep < MAX_FETCH_SLEEP {
@@ -196,6 +209,7 @@ async fn periodically_fetch_nodes(dht_command_tx: mpsc::Sender<DhtCommand>) {
             MAX_FETCH_SLEEP
         };
 
+        debug!("sleep for {} secs", seconds_to_sleep);
         sleep(Duration::from_secs(seconds_to_sleep)).await;
     }
 }

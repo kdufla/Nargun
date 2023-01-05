@@ -1,13 +1,15 @@
 use crate::constants::ID_LEN;
 use bytes::Bytes;
 use openssl::sha;
+use rand::{thread_rng, Rng};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
     cmp::Ordering,
+    fmt,
     ops::{BitXor, Sub},
 };
 
-#[derive(Debug, Clone, Hash)]
+#[derive(Clone, Hash)]
 pub struct ID(pub [u8; ID_LEN]); // TODO this should not be pub
 
 impl<'de> Deserialize<'de> for ID {
@@ -87,6 +89,26 @@ impl ID {
         Ordering::Equal
     }
 
+    pub fn randomize_after_bit(&mut self, i: usize) {
+        if i >= ID_LEN * 8 {
+            return;
+        }
+
+        let first_byte_idx = i / 8 + 1;
+
+        let mut rng = thread_rng();
+
+        for byte in &mut self.0[first_byte_idx..] {
+            *byte = rng.gen();
+        }
+
+        for bit_idx in (i + 1)..(first_byte_idx * 8) {
+            if rng.gen() {
+                self.flip_bit(bit_idx);
+            }
+        }
+    }
+
     pub fn left_or_right_by_depth<T>(&self, depth: usize, left: T, right: T) -> T {
         if self.get_bit(depth) {
             right
@@ -104,6 +126,40 @@ impl ID {
 
     pub fn as_bytes(&self) -> &[u8] {
         self.0.as_ref()
+    }
+
+    pub fn weight(&self) -> usize {
+        // this is not necessary, I wanted to use unsafe
+        let transmuted_bytes = unsafe { std::mem::transmute::<[u8; 20], [u32; 5]>(self.0) };
+        (hamming_weight(transmuted_bytes[0])
+            + hamming_weight(transmuted_bytes[1])
+            + hamming_weight(transmuted_bytes[2])
+            + hamming_weight(transmuted_bytes[3])
+            + hamming_weight(transmuted_bytes[4])) as usize
+    }
+}
+
+fn hamming_weight(mut x: u32) -> u32 {
+    x -= (x >> 1) & 0x55555555;
+    x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
+    x = (x + (x >> 4)) & 0x0f0f0f0f;
+    (x.wrapping_mul(0x01010101)) >> 24
+}
+
+impl fmt::Debug for ID {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut rv = String::with_capacity(64);
+        rv.push_str(&format!("{:08b} ", self.0[0]));
+        rv.push_str(&format!("{:08b} ", self.0[1]));
+
+        for chunk in self.0.chunks(4) {
+            rv.push(' ');
+            for byte in chunk {
+                rv.push_str(&format!("{:02X?}", byte));
+            }
+        }
+
+        f.write_str(&rv[1..])
     }
 }
 
@@ -162,10 +218,9 @@ impl<'a, 'b> Sub<&'b ID> for &'a ID {
 }
 
 #[cfg(test)]
-mod id_tests {
-    use std::cmp::Ordering;
-
+mod tests {
     use super::{ID, ID_LEN};
+    use std::cmp::Ordering;
 
     #[test]
     fn create() {
@@ -303,5 +358,26 @@ mod id_tests {
 
         assert_eq!(&left ^ &right, &left - &right);
         assert_eq!(&left ^ &right, &right - &left);
+    }
+
+    #[test]
+    fn weight() {
+        assert_eq!(
+            51,
+            ID([1, 1, 1, 1, 1, 0xFF, 0xFF, 0, 0x11, 0xFF, 0xFF, 0xFF, 1, 0, 0, 0, 0, 0, 1, 5,])
+                .weight()
+        );
+    }
+
+    #[test]
+    fn randomize() {
+        let mut id = ID([0; 20]);
+
+        for _ in 0..64 {
+            id.randomize_after_bit(8 + 2);
+            assert!(id.as_bytes()[1] <= 0b0001_1111);
+        }
+
+        assert!(id.weight() > 0);
     }
 }

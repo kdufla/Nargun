@@ -9,34 +9,47 @@ pub mod tracker;
 pub mod util;
 
 use anyhow::Result;
-use constants::ID_LEN;
+// use constants::ID_LEN;
 use core::time;
-use dht::{dht, routing_table::RoutingTable};
+use dht::dht;
 use peer::Peers;
-use peer_connection::{
-    command::{Command, CommandType},
-    info::PeerConnectionInfo,
-    PeerConnection,
-};
-use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
-    sync::{atomic::AtomicU64, Arc},
-    time::Duration,
-};
-use tokio::sync::broadcast;
+use std::net::SocketAddrV4;
+// use tokio::sync::broadcast;
 use tokio::{sync::mpsc, time::sleep};
-use util::{bitmap::Bitmap, id::ID};
+use util::id::ID;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    use tracing_subscriber::prelude::*;
+
+    // spawn the console server in the background,
+    // returning a `Layer`:
+    let console_layer = console_subscriber::spawn();
+
+    // build a `Subscriber` by combining layers with a
+    // `tracing_subscriber::Registry`:
+    tracing_subscriber::registry()
+        // add the console layer to the subscriber
+        .with(console_layer)
+        // add other layers...
+        .with(tracing_subscriber::fmt::layer())
+        // .with(...)
+        .init();
+
+    // let subscriber = tracing_subscriber::FmtSubscriber::new();
+    // // let subscriber = console_subscriber::init();
+    // tracing::subscriber::set_global_default(subscriber)?;
+    // console_subscriber::init();
+
     // env::set_var("RUST_BACKTRACE", "1");
-    let peer_id = ID(rand::random());
+    // let peer_id = ID(rand::random());
 
     let config = config::Config::new();
     let torrent = metainfo::from_file(&config.file);
 
-    // let addr: SocketAddrV4 = "79.7.28.179:64728".parse().unwrap();
-    let addr: SocketAddrV4 = "77.254.210.215:36028".parse().unwrap();
+    // let addr: SocketAddrV4 = "44.242.152.222:8850".parse().unwrap();
+    let addr: SocketAddrV4 = "121.142.222.29:59493".parse().unwrap();
+    // let addr: SocketAddrV4 = "77.254.210.215:36028".parse().unwrap();
     // torrent: &Torrent,
     // peer_id: &[u8; 20],
     // peers: Peers,
@@ -50,7 +63,7 @@ async fn main() -> Result<()> {
         dht(peers, ID(torrent.info_hash.clone()), rx).await;
     });
 
-    tx.send(addr).await;
+    let _ = tx.send(addr).await;
     // let pieces_downloaded = Arc::new(AtomicU64::new(0));
     // let (tx, _) = broadcast::channel(3);
 
