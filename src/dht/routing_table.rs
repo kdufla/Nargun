@@ -3,12 +3,15 @@ use crate::constants::{ID_LEN, T26IX};
 use crate::util::functions::socketaddr_from_compact_bytes;
 use crate::util::id::ID;
 use anyhow::{anyhow, bail, Result};
+use rand::{thread_rng, Rng};
 use std::cmp::Ordering;
 use std::fmt;
 use std::net::SocketAddrV4;
 use std::time::Duration;
 use tokio::time::Instant;
 use tracing::debug;
+
+const K_NODE_PER_BUCKET: usize = 8;
 
 #[derive(Debug)]
 pub struct RoutingTable {
@@ -26,7 +29,7 @@ enum TreeNode {
 #[derive(Debug, Clone)]
 struct Bucket {
     depth: usize,
-    data: [Option<Node>; 8],
+    data: [Option<Node>; K_NODE_PER_BUCKET],
 }
 
 #[derive(Eq, Clone)]
@@ -68,7 +71,7 @@ impl RoutingTable {
         let mut prev_depth = usize::MAX;
         let mut sibling_id = id.to_owned();
 
-        while closest.len() < 8 && prev_depth != bucket.depth {
+        while closest.len() < K_NODE_PER_BUCKET && prev_depth != bucket.depth {
             prev_depth = bucket.depth;
 
             closest.extend(bucket.iter_over_goods().cloned());
@@ -158,6 +161,7 @@ impl RoutingTable {
             .is_eq();
 
         if !own_id_within_the_bucket {
+            bucket.replace(&id, &addr);
             return;
         }
 
@@ -223,7 +227,7 @@ impl Bucket {
     fn new(depth: usize) -> Self {
         Self {
             depth,
-            data: [(); 8].map(|_| Option::<Node>::default()),
+            data: [(); K_NODE_PER_BUCKET].map(|_| Option::<Node>::default()),
         }
     }
 
@@ -267,28 +271,47 @@ impl Bucket {
             .as_mut()
     }
 
+    fn replace(&mut self, id: &ID, addr: &SocketAddrV4) {
+        let replaceable_idx = match self.find_replaceable_node_idx() {
+            Ok(idx) => idx,
+            Err(_) => thread_rng().gen_range(0..K_NODE_PER_BUCKET),
+        };
+
+        self.data[replaceable_idx] = Some(Node {
+            id: id.to_owned(),
+            addr: addr.to_owned(),
+            last_seen: Some(Instant::now()),
+        });
+    }
+
     fn try_insert(&mut self, id: &ID, addr: &SocketAddrV4) -> Result<()> {
-        let empty_elem = self.data.iter_mut().find(|x| x.is_none());
-
-        let replaceable_elem = if empty_elem.is_none() {
-            self.data
-                .iter_mut()
-                .find(|x| Node::is_some_and_good(x).is_none())
-        } else {
-            empty_elem
-        };
-
-        let Some(elem_to_replace)= replaceable_elem else {
-            return Err(anyhow!("bucket is full"));
-        };
-
-        *elem_to_replace = Some(Node {
+        *self.find_replaceable_node()? = Some(Node {
             id: id.to_owned(),
             addr: addr.to_owned(),
             last_seen: Some(Instant::now()),
         });
 
         Ok(())
+    }
+
+    fn find_replaceable_node(&mut self) -> Result<&mut Option<Node>> {
+        Ok(&mut self.data[self.find_replaceable_node_idx()?])
+    }
+
+    fn find_replaceable_node_idx(&self) -> Result<usize> {
+        if let Some(vacant_node) = self.data.iter().position(|x| x.is_none()) {
+            return Ok(vacant_node);
+        }
+
+        if let Some(bad_node) = self
+            .data
+            .iter()
+            .position(|x| Node::is_some_and_good(x).is_none())
+        {
+            return Ok(bad_node);
+        }
+
+        Err(anyhow!("bucket is full"))
     }
 
     fn iter_over_goods(&self) -> impl Iterator<Item = &Node> {
@@ -424,7 +447,7 @@ impl<'a> Iterator for RTIter<'a> {
 
             let bucket = &self.data.get_bucket(&rv);
 
-            if bucket.iter_over_goods().count() < 8 {
+            if bucket.iter_over_goods().count() < K_NODE_PER_BUCKET {
                 break;
             }
 
@@ -448,7 +471,7 @@ mod routing_table_tests {
         util::{functions::socketaddr_from_compact_bytes, id::ID},
     };
 
-    use super::{RoutingTable, TreeNode};
+    use super::{RoutingTable, TreeNode, K_NODE_PER_BUCKET};
 
     fn random_node() -> (ID, SocketAddrV4) {
         let id = ID(rand::random());
@@ -507,7 +530,7 @@ mod routing_table_tests {
         let mut rt = RoutingTable::new(ID(rand::random()));
         let (mut id, addr) = random_node();
 
-        for i in 0..8 {
+        for i in 0..K_NODE_PER_BUCKET {
             rt.insert_good(id.to_owned(), addr.to_owned());
             id.flip_bit(0);
             id.flip_bit(i + 1);
@@ -531,7 +554,7 @@ mod routing_table_tests {
         let mut rt = RoutingTable::new(ID(rand::random()));
         let (mut id, addr) = random_node();
 
-        for i in 0..8 {
+        for i in 0..K_NODE_PER_BUCKET {
             rt.insert_good(id.to_owned(), addr.to_owned());
             id.flip_bit(1);
             id.flip_bit(i + 2);

@@ -11,11 +11,16 @@ use crate::{constants::T26IX, dht::connection::ConCommand, peer::Peers, util::id
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use rand::{seq::IteratorRandom, thread_rng};
-use std::{collections::HashMap, net::SocketAddrV4, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    net::SocketAddrV4,
+    time::Duration,
+};
 use tokio::{select, sync::mpsc, time::sleep};
 use tracing::{debug, error};
 
-const MAX_FETCH_SLEEP: u64 = 60;
+const MAX_NODE_FETCH_SLEEP: u64 = 60;
+const MAX_PEER_FETCH_SLEEP: u64 = 180;
 
 #[derive(Debug)]
 pub enum DhtCommand {
@@ -25,6 +30,7 @@ pub enum DhtCommand {
     FindNode(ID, Bytes, SocketAddrV4),
     GetPeers(ID, Bytes, SocketAddrV4),
     FetchNodes,
+    FetchPeers(ID),
 }
 
 pub async fn dht(peers: Peers, info_hash: ID, mut new_peer_with_dht: mpsc::Receiver<SocketAddrV4>) {
@@ -38,10 +44,17 @@ pub async fn dht(peers: Peers, info_hash: ID, mut new_peer_with_dht: mpsc::Recei
     let udp_connection =
         Connection::new(own_node_id.to_owned(), conn_tx, conn_rx, dht_tx.to_owned());
 
-    let mut peer_map = HashMap::from([(info_hash.to_owned(), peers.peer_addresses())]);
+    let known_peers: HashSet<SocketAddrV4> = peers.peer_addresses().into_iter().collect();
+    let mut peer_map = HashMap::from([(info_hash.to_owned(), known_peers)]);
 
+    let dht_tx_clone = dht_tx.clone();
     tokio::spawn(async move {
-        periodically_fetch_nodes(dht_tx).await;
+        periodically_fetch_nodes(dht_tx_clone).await;
+    });
+
+    let dht_tx_clone = dht_tx.clone();
+    tokio::spawn(async move {
+        periodically_fetch_peers(dht_tx_clone, info_hash).await;
     });
 
     loop {
@@ -63,7 +76,7 @@ async fn process_incoming_command(
     routing_table: &mut RoutingTable,
     connection: &Connection,
     peers: &Peers,
-    peer_map: &mut HashMap<ID, Vec<SocketAddrV4>>,
+    peer_map: &mut HashMap<ID, HashSet<SocketAddrV4>>,
     own_id: &ID,
 ) -> Result<()> {
     let Some(command)  = command else{
@@ -80,7 +93,7 @@ async fn process_incoming_command(
             }
         }
         DhtCommand::NewPeers(peer_list, info_hash) => {
-            let mut addr_list = peer_list.iter().map(|p| p.addr().to_owned()).collect();
+            let addr_list = peer_list.iter().map(|p| p.addr().to_owned()).collect();
 
             if info_hash == *own_id {
                 // TODO this is dumb.. peer is just a wrapper, insert should accept it.
@@ -89,8 +102,12 @@ async fn process_incoming_command(
 
             peer_map
                 .entry(info_hash)
-                .and_modify(|stored_peers| stored_peers.append(&mut addr_list))
-                .or_insert(addr_list);
+                .and_modify(|stored_peers| {
+                    for peer in addr_list.iter() {
+                        stored_peers.insert(peer.to_owned());
+                    }
+                })
+                .or_insert(addr_list.into_iter().collect());
         }
         DhtCommand::FindNode(target, tid, from) => {
             try_find_node(connection, routing_table, &target, from, tid).await?
@@ -125,6 +142,9 @@ async fn process_incoming_command(
             connection.conn_command_tx.send(command).await?
         }
         DhtCommand::FetchNodes => fetch_nodes(routing_table, connection).await,
+        DhtCommand::FetchPeers(info_hash) => {
+            fetch_peers(routing_table, connection, info_hash).await
+        }
     }
 
     Ok(())
@@ -189,27 +209,80 @@ async fn fetch_nodes(routing_table: &mut RoutingTable, connection: &Connection) 
     }
 }
 
-async fn periodically_fetch_nodes(dht_command_tx: mpsc::Sender<DhtCommand>) {
-    let growth_formula = |x: u64| {
-        let x = x as f64;
-        let y = 10.0 + 3.4 * x.powf(0.65);
-        y as u64
+async fn fetch_peers(routing_table: &RoutingTable, connection: &Connection, info_hash: ID) {
+    let mut close_nodes = [None, None, None];
+
+    match routing_table.find_node(&info_hash) {
+        Some(nodes) => match nodes {
+            Nodes::Exact(exact_node) => {
+                close_nodes[0] = Some(exact_node);
+            }
+            Nodes::Closest(closest_nodes) => {
+                for (i, close_node) in closest_nodes
+                    .into_iter()
+                    .take(close_nodes.len())
+                    .enumerate()
+                {
+                    close_nodes[i] = Some(close_node);
+                }
+            }
+        },
+        None => return,
     };
+
+    for node in close_nodes.into_iter().filter_map(std::convert::identity) {
+        let (command, _) = ConCommand::new(
+            CommandType::Query(QueryCommand::GetPeers {
+                info_hash: info_hash.to_owned(),
+            }),
+            node.addr,
+        );
+
+        connection.conn_command_tx.send(command).await;
+    }
+}
+
+async fn periodically_fetch_nodes(dht_command_tx: mpsc::Sender<DhtCommand>) {
+    let growth_formula = |x: u64| (9.0 + 0.001 * (x as f64).powf(2.4)) as u64;
 
     for i in 0..u64::MAX {
         match dht_command_tx.send(DhtCommand::FetchNodes).await {
-            Ok(_) => debug!("\n\n\n\n\n\n\n\n\n\nfetch"),
-            Err(e) => error!("periodical fetch failed {:?}", e),
+            Ok(_) => debug!("fetch nodes"),
+            Err(e) => error!("periodical fetch nodes failed {:?}", e),
         };
 
         let seconds_to_sleep = growth_formula(i);
-        let seconds_to_sleep = if seconds_to_sleep < MAX_FETCH_SLEEP {
+        let seconds_to_sleep = if seconds_to_sleep < MAX_NODE_FETCH_SLEEP {
             seconds_to_sleep
         } else {
-            MAX_FETCH_SLEEP
+            MAX_NODE_FETCH_SLEEP
         };
 
-        debug!("sleep for {} secs", seconds_to_sleep);
+        debug!("fetch_nodes: sleep for {} secs", seconds_to_sleep);
+        sleep(Duration::from_secs(seconds_to_sleep)).await;
+    }
+}
+
+async fn periodically_fetch_peers(dht_command_tx: mpsc::Sender<DhtCommand>, info_hash: ID) {
+    let growth_formula = |x: u64| (5.0 + 0.000001 * (x as f64).powf(5.6)) as u64;
+
+    for i in 0..u64::MAX {
+        match dht_command_tx
+            .send(DhtCommand::FetchPeers(info_hash.to_owned()))
+            .await
+        {
+            Ok(_) => debug!("fetch peers"),
+            Err(e) => error!("periodical fetch peers failed {:?}", e),
+        };
+
+        let seconds_to_sleep = growth_formula(i);
+        let seconds_to_sleep = if seconds_to_sleep < MAX_PEER_FETCH_SLEEP {
+            seconds_to_sleep
+        } else {
+            MAX_PEER_FETCH_SLEEP
+        };
+
+        debug!("fetch_peers: sleep for {} secs", seconds_to_sleep);
         sleep(Duration::from_secs(seconds_to_sleep)).await;
     }
 }

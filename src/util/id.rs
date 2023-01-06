@@ -149,7 +149,7 @@ fn hamming_weight(mut x: u32) -> u32 {
 impl fmt::Debug for ID {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut rv = String::with_capacity(64);
-        rv.push_str(&format!("{:08b} ", self.0[0]));
+        rv.push_str(&format!(" {:08b} ", self.0[0]));
         rv.push_str(&format!("{:08b} ", self.0[1]));
 
         for chunk in self.0.chunks(4) {
