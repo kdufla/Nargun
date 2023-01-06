@@ -10,6 +10,7 @@ use std::sync::Mutex;
 use tokio::net::UdpSocket;
 use tokio::select;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::SendError;
 use tokio::sync::oneshot;
 use tracing::{debug, error, info, trace, warn};
 
@@ -18,7 +19,7 @@ pub const MTU: usize = 1300;
 #[derive(Clone, Debug)]
 pub struct Connection {
     own_id: ID,
-    pub conn_command_tx: mpsc::Sender<ConCommand>,
+    conn_command_tx: mpsc::Sender<ConCommand>,
 }
 
 impl Connection {
@@ -39,6 +40,14 @@ impl Connection {
         });
 
         rv
+    }
+
+    pub async fn send(&self, command: ConCommand) -> Result<(), SendError<ConCommand>> {
+        let res = self.conn_command_tx.send(command).await;
+        if let Err(e) = &res {
+            debug!("connection can't accept command. e = {:?}", e);
+        }
+        res
     }
 
     async fn manage_udp(

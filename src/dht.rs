@@ -139,7 +139,7 @@ async fn process_incoming_command(
                 from,
             );
 
-            connection.conn_command_tx.send(command).await?
+            connection.send(command).await?
         }
         DhtCommand::FetchNodes => fetch_nodes(routing_table, connection).await,
         DhtCommand::FetchPeers(info_hash) => {
@@ -166,7 +166,7 @@ async fn try_find_node(
         from,
     );
 
-    Ok(connection.conn_command_tx.send(command).await?)
+    Ok(connection.send(command).await?)
 }
 
 async fn try_ping_node(connection: &Connection, addr: Option<SocketAddrV4>) -> Result<()> {
@@ -183,7 +183,7 @@ async fn ping_node(connection: &Connection, addr: SocketAddrV4) {
         addr,
     );
 
-    let _ = connection.conn_command_tx.send(command).await;
+    let _ = connection.send(command).await;
 }
 
 async fn fetch_nodes(routing_table: &mut RoutingTable, connection: &Connection) {
@@ -205,7 +205,7 @@ async fn fetch_nodes(routing_table: &mut RoutingTable, connection: &Connection) 
             node.addr,
         );
 
-        connection.conn_command_tx.send(command).await;
+        let _ = connection.send(command).await;
     }
 }
 
@@ -238,7 +238,7 @@ async fn fetch_peers(routing_table: &RoutingTable, connection: &Connection, info
             node.addr,
         );
 
-        connection.conn_command_tx.send(command).await;
+        let _ = connection.send(command).await;
     }
 }
 
