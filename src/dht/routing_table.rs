@@ -48,6 +48,10 @@ impl RoutingTable {
         Self { own_id, data }
     }
 
+    pub fn own_id(&self) -> &ID {
+        &self.own_id
+    }
+
     pub fn find_node(&self, id: &ID) -> Option<Nodes> {
         let bucket = self.get_bucket(id);
 
@@ -64,6 +68,20 @@ impl RoutingTable {
             depth: 0,
             idx: 0,
         }
+    }
+
+    pub fn touch_node(&mut self, id: ID, addr: SocketAddrV4) {
+        let bucket = self.get_bucket_mut(&id);
+
+        if let Some(node) = bucket.get_node_mut(&id) {
+            node.last_seen = Some(Instant::now());
+        } else {
+            self.insert_good(id.to_owned(), addr);
+        }
+    }
+
+    pub fn contains_node(&self, id: &ID) -> bool {
+        self.get_bucket(id).contains(id)
     }
 
     fn get_closest_nodes<'a>(&'a self, id: &ID, mut bucket: &'a Bucket) -> Option<Nodes> {
@@ -91,16 +109,6 @@ impl RoutingTable {
         }
     }
 
-    pub fn touch_node(&mut self, id: ID, addr: SocketAddrV4) {
-        let bucket = self.get_bucket_mut(&id);
-
-        if let Some(node) = bucket.get_node_mut(&id) {
-            node.last_seen = Some(Instant::now());
-        } else {
-            self.insert_good(id.to_owned(), addr);
-        }
-    }
-
     fn get_bucket(&self, id: &ID) -> &Bucket {
         let bucket_idx = self.find_bucket_idx_by_id(id);
 
@@ -119,10 +127,6 @@ impl RoutingTable {
         };
 
         bucket
-    }
-
-    fn contains_node(&self, id: &ID) -> bool {
-        self.get_bucket(id).contains(id)
     }
 
     fn find_bucket_idx_by_id(&self, id: &ID) -> usize {

@@ -1,6 +1,7 @@
 use super::routing_table::Node;
 use crate::{
     constants::{SIX, T26IX},
+    peer::Peer,
     peer_message::SerializableBytes,
     util::{functions::socketaddr_from_compact_bytes, id::ID},
 };
@@ -99,8 +100,14 @@ pub enum ValuesOrNodes {
     Nodes { nodes: Nodes },
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct Peer(SocketAddrV4);
+// #[derive(Debug, PartialEq, Eq)]
+// pub struct Peer(SocketAddrV4);
+
+// impl From<Peer> for SocketAddrV4 {
+//     fn from(item: Peer) -> Self {
+//         item.0
+//     }
+// }
 
 #[derive(Debug)]
 pub enum Nodes {
@@ -258,73 +265,6 @@ impl Message {
             msg_type: MessageType(b'e'),
             error,
         }
-    }
-}
-
-impl Peer {
-    pub fn new(addr: SocketAddrV4) -> Self {
-        Self(addr)
-    }
-
-    fn from_compact_bytes(buff: &[u8]) -> Result<Self> {
-        if buff.len() == SIX {
-            Ok(Peer(socketaddr_from_compact_bytes(buff)?))
-        } else {
-            bail!(
-                "Peer::from_compact buff size is {}, expected {}",
-                buff.len(),
-                SIX
-            )
-        }
-    }
-
-    pub fn addr(&self) -> &SocketAddrV4 {
-        &self.0
-    }
-}
-
-impl Serialize for Peer {
-    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut v = Vec::new();
-
-        v.extend_from_slice(&self.0.ip().octets());
-        v.push((self.0.port() >> 8) as u8);
-        v.push((self.0.port() & 0xff) as u8);
-
-        s.serialize_bytes(&v)
-    }
-}
-
-impl<'de> Deserialize<'de> for Peer {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct Visitor;
-
-        impl<'de> serde::de::Visitor<'de> for Visitor {
-            type Value = Peer;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("Compact <ip=4><port=2> bytes")
-            }
-
-            fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                if v.len() == SIX {
-                    Peer::from_compact_bytes(v).map_err(serde::de::Error::custom)
-                } else {
-                    Err(serde::de::Error::invalid_length(v.len(), &self))
-                }
-            }
-        }
-
-        Ok(deserializer.deserialize_byte_buf(Visitor {})?)
     }
 }
 
@@ -512,22 +452,6 @@ mod krpc_tests {
     }
 
     #[test]
-    fn peer_from_compact() {
-        let data = "yhf5aa".as_bytes();
-        let result = Peer::from_compact_bytes(data);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().0.to_string(), "121.104.102.53:24929");
-
-        let long_data = "yhf5aa++".as_bytes();
-        let result = Peer::from_compact_bytes(long_data);
-        assert!(result.is_err());
-
-        let short_data = "yhf".as_bytes();
-        let result = Peer::from_compact_bytes(short_data);
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn node_from_compact() {
         let data = "qwertyuiopasdfghjklzyhf5aa".as_bytes();
         let result = Node::from_compact_bytes(data);
@@ -557,9 +481,10 @@ mod krpc_tests {
         use super::super::Message;
         use crate::{
             dht::{
-                krpc_message::{Error, Nodes, Peer, ValuesOrNodes},
+                krpc_message::{Error, Nodes, ValuesOrNodes},
                 routing_table::Node,
             },
+            peer::Peer,
             util::id::ID,
         };
         use std::net::{Ipv4Addr, SocketAddrV4};
@@ -687,11 +612,11 @@ mod krpc_tests {
                 Bytes::from_static(b"aoeusnth"),
                 ValuesOrNodes::Values {
                     values: vec![
-                        Peer(SocketAddrV4::new(
+                        Peer::new(SocketAddrV4::new(
                             Ipv4Addr::new(b'a', b'x', b'j', b'e'),
                             11893,
                         )),
-                        Peer(SocketAddrV4::new(
+                        Peer::new(SocketAddrV4::new(
                             Ipv4Addr::new(b'i', b'd', b'h', b't'),
                             28269,
                         )),
@@ -790,7 +715,8 @@ mod krpc_tests {
 
         use super::super::Message;
         use crate::{
-            dht::krpc_message::{Arguments, Error, Nodes, Peer, Response, ValuesOrNodes},
+            dht::krpc_message::{Arguments, Error, Nodes, Response, ValuesOrNodes},
+            peer::Peer,
             util::id::ID,
         };
         use std::net::{Ipv4Addr, SocketAddrV4};
@@ -1080,14 +1006,14 @@ mod krpc_tests {
 
                         assert_eq!(
                             values[0],
-                            Peer(SocketAddrV4::new(
+                            Peer::new(SocketAddrV4::new(
                                 Ipv4Addr::new(b'a', b'x', b'j', b'e'),
                                 11893
                             ))
                         );
                         assert_eq!(
                             values[1],
-                            Peer(SocketAddrV4::new(
+                            Peer::new(SocketAddrV4::new(
                                 Ipv4Addr::new(b'i', b'd', b'h', b't'),
                                 28269
                             ))

@@ -1,5 +1,6 @@
-use super::krpc_message::{Arguments, Message, Nodes, Peer, Response, ValuesOrNodes};
+use super::krpc_message::{Arguments, Message, Nodes, Response, ValuesOrNodes};
 use super::DhtCommand;
+use crate::peer::Peer;
 use crate::util::id::ID;
 use bytes::Bytes;
 use std::collections::HashMap;

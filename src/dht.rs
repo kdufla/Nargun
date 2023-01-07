@@ -4,20 +4,31 @@ pub mod routing_table;
 
 use self::{
     connection::{CommandType, Connection, QueryCommand, RespCommand, MTU},
-    krpc_message::{Nodes, Peer, ValuesOrNodes},
+    krpc_message::{Nodes, ValuesOrNodes},
     routing_table::RoutingTable,
 };
-use crate::{constants::T26IX, dht::connection::ConCommand, peer::Peers, util::id::ID};
+use crate::{
+    constants::T26IX,
+    dht::connection::ConCommand,
+    peer::{Peer, Peers},
+    util::id::ID,
+};
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use rand::{seq::IteratorRandom, thread_rng};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{hash_map, HashMap, HashSet},
     net::SocketAddrV4,
     time::Duration,
 };
-use tokio::{select, sync::mpsc, time::sleep};
-use tracing::{debug, error};
+use tokio::{
+    select,
+    sync::mpsc::{self, Receiver},
+    time::sleep,
+};
+use tracing::{debug, error, warn};
+
+type PeerMap = HashMap<ID, HashSet<Peer>>;
 
 const MAX_NODE_FETCH_SLEEP: u64 = 60;
 const MAX_PEER_FETCH_SLEEP: u64 = 180;
@@ -34,18 +45,39 @@ pub enum DhtCommand {
 }
 
 pub async fn dht(peers: Peers, info_hash: ID, mut new_peer_with_dht: mpsc::Receiver<SocketAddrV4>) {
+    let (mut routing_table, udp_connection, mut dht_command_rx, mut peer_map) =
+        setup(&peers, info_hash);
+
+    loop {
+        match select! {
+            addr = new_peer_with_dht.recv() => try_ping_node(&udp_connection, addr).await,
+            command = dht_command_rx.recv() => process_incoming_command(command, &mut routing_table, &udp_connection, &peers, &mut peer_map).await,
+        } {
+            Ok(_) => debug!(
+                "command handled\nrouting_table = {:?}\npeer_map = {:?}",
+                routing_table, peer_map
+            ),
+            Err(e) => error!("dht command failed. e = {:?}", e),
+        }
+    }
+}
+
+fn setup(
+    peers: &Peers,
+    info_hash: ID,
+) -> (RoutingTable, Connection, Receiver<DhtCommand>, PeerMap) {
     let own_node_id = ID(rand::random());
 
-    let mut routing_table = RoutingTable::new(own_node_id.to_owned());
+    let routing_table = RoutingTable::new(own_node_id.to_owned());
 
-    let (dht_tx, mut dht_rx) = mpsc::channel(64);
+    let (dht_tx, dht_rx) = mpsc::channel(64);
     let (conn_tx, conn_rx) = mpsc::channel(64);
 
     let udp_connection =
         Connection::new(own_node_id.to_owned(), conn_tx, conn_rx, dht_tx.to_owned());
 
-    let known_peers: HashSet<SocketAddrV4> = peers.peer_addresses().into_iter().collect();
-    let mut peer_map = HashMap::from([(info_hash.to_owned(), known_peers)]);
+    let known_peers: HashSet<Peer> = peers.peer_addresses().into_iter().collect();
+    let peer_map = HashMap::from([(info_hash.to_owned(), known_peers)]);
 
     let dht_tx_clone = dht_tx.clone();
     tokio::spawn(async move {
@@ -57,27 +89,15 @@ pub async fn dht(peers: Peers, info_hash: ID, mut new_peer_with_dht: mpsc::Recei
         periodically_fetch_peers(dht_tx_clone, info_hash).await;
     });
 
-    loop {
-        match select! {
-            addr = new_peer_with_dht.recv() => try_ping_node(&udp_connection, addr).await,
-            command = dht_rx.recv() => process_incoming_command(command, &mut routing_table, &udp_connection, &peers, &mut peer_map, &own_node_id).await,
-        } {
-            Ok(_) => debug!(
-                "command handled\nrouting_table = {:?}\npeer_map = {:?}",
-                routing_table, peer_map
-            ),
-            Err(e) => error!("dht command failed. e = {:?}", e),
-        }
-    }
+    (routing_table, udp_connection, dht_rx, peer_map)
 }
 
 async fn process_incoming_command(
     command: Option<DhtCommand>,
     routing_table: &mut RoutingTable,
     connection: &Connection,
-    peers: &Peers,
-    peer_map: &mut HashMap<ID, HashSet<SocketAddrV4>>,
-    own_id: &ID,
+    torrent_peers: &Peers,
+    dht_peer_map: &mut PeerMap,
 ) -> Result<()> {
     let Some(command)  = command else{
         return Err(anyhow!("DhtCommand is None"));
@@ -87,40 +107,26 @@ async fn process_incoming_command(
 
     match command {
         DhtCommand::Touch(id, addr) => routing_table.touch_node(id, addr),
-        DhtCommand::NewNodes(nodes) => {
-            for node in nodes.iter() {
-                try_ping_node(connection, Some(node.addr)).await?
-            }
-        }
-        DhtCommand::NewPeers(peer_list, info_hash) => {
-            let addr_list = peer_list.iter().map(|p| p.addr().to_owned()).collect();
-
-            if info_hash == *own_id {
-                // TODO this is dumb.. peer is just a wrapper, insert should accept it.
-                peers.insert_list(&addr_list);
-            }
-
-            peer_map
-                .entry(info_hash)
-                .and_modify(|stored_peers| {
-                    for peer in addr_list.iter() {
-                        stored_peers.insert(peer.to_owned());
-                    }
-                })
-                .or_insert(addr_list.into_iter().collect());
-        }
+        DhtCommand::NewNodes(nodes) => ping_unknown_nodes(nodes, connection, routing_table),
+        DhtCommand::NewPeers(new_peers, info_hash) => store_new_peers(
+            new_peers,
+            info_hash,
+            routing_table,
+            torrent_peers,
+            dht_peer_map,
+        ),
         DhtCommand::FindNode(target, tid, from) => {
             try_find_node(connection, routing_table, &target, from, tid).await?
         }
         DhtCommand::GetPeers(info_hash, tid, from) => {
-            let vorn = match peer_map.get(&info_hash) {
+            let vorn = match dht_peer_map.get(&info_hash) {
                 Some(peer_list) => {
                     let mut rng = thread_rng();
                     let sample = peer_list
                         .iter()
                         .choose_multiple(&mut rng, MTU / T26IX)
                         .iter()
-                        .map(|addr| Peer::new(*addr.clone()))
+                        .map(|x| (*x).clone())
                         .collect();
 
                     ValuesOrNodes::Values { values: sample }
@@ -148,6 +154,46 @@ async fn process_incoming_command(
     }
 
     Ok(())
+}
+
+fn ping_unknown_nodes(nodes: Nodes, connection: &Connection, routing_table: &RoutingTable) {
+    let unknown_node_addresses: Vec<SocketAddrV4> = nodes
+        .iter()
+        .filter_map(|node| routing_table.contains_node(&node.id).then_some(node.addr))
+        .collect();
+
+    let owned_connection = connection.to_owned();
+    tokio::spawn(async move {
+        for node_addr in unknown_node_addresses {
+            if let Err(e) = try_ping_node(&owned_connection, Some(node_addr)).await {
+                warn!(?e);
+            }
+        }
+    });
+}
+
+fn store_new_peers(
+    new_peers: Vec<Peer>,
+    info_hash: ID,
+    routing_table: &RoutingTable,
+    torrent_peers: &Peers,
+    dht_peer_map: &mut PeerMap,
+) {
+    if info_hash == *routing_table.own_id() {
+        torrent_peers.insert_list(&new_peers);
+    }
+
+    match dht_peer_map.entry(info_hash) {
+        hash_map::Entry::Occupied(mut entry) => {
+            let stored_peers = entry.get_mut();
+            for peer in new_peers.iter() {
+                stored_peers.insert(peer.to_owned());
+            }
+        }
+        hash_map::Entry::Vacant(entry) => {
+            entry.insert(new_peers.into_iter().collect());
+        }
+    }
 }
 
 async fn try_find_node(
@@ -214,6 +260,7 @@ async fn fetch_peers(routing_table: &RoutingTable, connection: &Connection, info
 
     match routing_table.find_node(&info_hash) {
         Some(nodes) => match nodes {
+            // TODO this should be done with an iter
             Nodes::Exact(exact_node) => {
                 close_nodes[0] = Some(exact_node);
             }
