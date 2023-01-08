@@ -1,5 +1,6 @@
 use super::krpc_message::{Arguments, Message, Nodes, Response, ValuesOrNodes};
 use super::DhtCommand;
+use crate::gateway_device::LOCAL_PORT_UDP;
 use crate::peer::Peer;
 use crate::util::id::ID;
 use bytes::Bytes;
@@ -56,8 +57,9 @@ impl Connection {
         conn_command_rx: mpsc::Receiver<ConCommand>,
         dht_command_tx: mpsc::Sender<DhtCommand>,
     ) {
-        let sock = UdpSocket::bind("0.0.0.0:46491").await.unwrap();
-        let _local_addr = sock.local_addr().unwrap().port(); // TODO PORT message needs this
+        let sock = UdpSocket::bind(format!("0.0.0.0:{}", LOCAL_PORT_UDP))
+            .await
+            .unwrap();
 
         info!(?sock);
 

@@ -1,6 +1,7 @@
 pub mod config;
 pub mod constants;
 pub mod dht;
+pub mod gateway_device;
 pub mod metainfo;
 pub mod peer;
 pub mod peer_connection;
@@ -9,6 +10,7 @@ pub mod tracker;
 pub mod util;
 
 use anyhow::Result;
+use tracing::{debug, error, info, warn};
 // use constants::ID_LEN;
 use core::time;
 use dht::dht;
@@ -47,6 +49,9 @@ async fn main() -> Result<()> {
     let config = config::Config::new();
     let torrent = metainfo::from_file(&config.file);
 
+    let (tcp_port, udp_port) = gateway_device::open_any_port()?;
+    info!(?tcp_port, ?udp_port);
+
     // let addr: SocketAddrV4 = "44.242.152.222:8850".parse().unwrap();
     let addr: SocketAddrV4 = "121.142.222.29:59493".parse().unwrap();
     // let addr: SocketAddrV4 = "77.254.210.215:36028".parse().unwrap();
@@ -76,7 +81,7 @@ async fn main() -> Result<()> {
     // sleep(Duration::from_secs(300)).await;
 
     // let peer_ip = Ipv4Addr::new(5, 135, 157, 164);
-    // let peer_port = 51413;
+    // let peer_port = LOCAL_PORT_TCP;
 
     // let peer_sa = SocketAddr::new(IpAddr::V4(peer_ip), peer_port);
     // // let peer_sa = peers.get_random().unwrap();

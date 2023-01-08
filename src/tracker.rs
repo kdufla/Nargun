@@ -64,13 +64,14 @@ async fn manage_http_tracker(
     pieces_downloaded: Arc<AtomicU64>,
     peers: Peers,
     mut announce_event_message: Receiver<bool>,
+    tcp_port: u16,
 ) {
     println!("spawned {}", tracker_url);
     let mut announce = Announce {
         tracker_url,
         info_hash,
         peer_id,
-        port: 46491, // TODO this port forwarding, read what UPnP is and use is (this seems like the answer https://crates.io/crates/igd)
+        port: tcp_port,
         uploaded: 0,
         downloaded: 0,
         left: (piece_count - pieces_downloaded.load(Ordering::Relaxed)) * piece_length,
@@ -130,6 +131,7 @@ pub async fn spawns_tracker_managers(
     peers: &Peers,
     pieces_downloaded: Arc<AtomicU64>,
     tx: &broadcast::Sender<bool>,
+    tcp_port: u16,
 ) {
     println!("start");
     for tracker in torrent.http_trackers() {
@@ -153,6 +155,7 @@ pub async fn spawns_tracker_managers(
                 pieces_downloaded,
                 peers,
                 announce_event_message,
+                tcp_port,
             )
             .await
         });
