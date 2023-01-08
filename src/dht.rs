@@ -139,7 +139,7 @@ async fn process_incoming_command(
 fn ping_unknown_nodes(nodes: Nodes, connection: &Connection, routing_table: &RoutingTable) {
     let unknown_node_addresses: Vec<SocketAddrV4> = nodes
         .iter()
-        .filter_map(|node| routing_table.contains_node(&node.id).then_some(node.addr))
+        .filter_map(|node| (!routing_table.contains_node(&node.id)).then_some(node.addr))
         .collect();
 
     let owned_connection = connection.to_owned();
