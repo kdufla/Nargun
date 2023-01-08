@@ -6,7 +6,7 @@ use std::net::SocketAddrV4;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Instant;
 
-use crate::constants::SIX;
+use crate::constants::COMPACT_SOCKADDR_LEN;
 use crate::util::functions::socketaddr_from_compact_bytes;
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
@@ -18,13 +18,13 @@ impl Peer {
     }
 
     fn from_compact_bytes(buff: &[u8]) -> Result<Self> {
-        if buff.len() == SIX {
+        if buff.len() == COMPACT_SOCKADDR_LEN {
             Ok(Peer(socketaddr_from_compact_bytes(buff)?))
         } else {
             bail!(
                 "Peer::from_compact buff size is {}, expected {}",
                 buff.len(),
-                SIX
+                COMPACT_SOCKADDR_LEN
             )
         }
     }
@@ -67,7 +67,7 @@ impl<'de> Deserialize<'de> for Peer {
             where
                 E: serde::de::Error,
             {
-                if v.len() == SIX {
+                if v.len() == COMPACT_SOCKADDR_LEN {
                     Peer::from_compact_bytes(v).map_err(serde::de::Error::custom)
                 } else {
                     Err(serde::de::Error::invalid_length(v.len(), &self))

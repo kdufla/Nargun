@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::{bail, Result};
 
-use crate::constants::SIX;
+use crate::constants::COMPACT_SOCKADDR_LEN;
 
 use super::id::ID;
 
@@ -23,13 +23,13 @@ pub fn vec_to_id(v: Vec<u8>) -> ID {
 
 pub fn socketaddr_from_compact_bytes(buff: &[u8]) -> Result<SocketAddrV4> {
     match buff.len() {
-        SIX => Ok(SocketAddrV4::new(
+        COMPACT_SOCKADDR_LEN => Ok(SocketAddrV4::new(
             Ipv4Addr::new(buff[0], buff[1], buff[2], buff[3]),
             ((buff[4] as u16) << 8) | buff[5] as u16,
         )),
         _ => bail!(
             "socketaddr_from_compact_bytes: buffer len expected {} found {}",
-            SIX,
+            COMPACT_SOCKADDR_LEN,
             buff.len()
         ),
     }

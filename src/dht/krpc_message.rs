@@ -1,14 +1,10 @@
 use super::routing_table::Node;
 use crate::{
-    constants::{SIX, T26IX},
-    peer::Peer,
-    peer_message::SerializableBytes,
-    util::{functions::socketaddr_from_compact_bytes, id::ID},
+    constants::COMPACT_NODE_LEN, peer::Peer, peer_message::SerializableBytes, util::id::ID,
 };
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use serde::{de::Unexpected, Deserialize, Deserializer, Serialize, Serializer};
-use std::net::SocketAddrV4;
 use std::str;
 
 // TODO fuck bendy! it's the worst decision I've made. I need to impl my own parser for serde.
@@ -399,13 +395,13 @@ impl<'de> Deserialize<'de> for Nodes {
             where
                 E: serde::de::Error,
             {
-                let data_len_is_multiple_of_node_len = v.len() % T26IX != 0;
-                let number_of_nodes = v.len() / T26IX;
+                let data_len_is_multiple_of_node_len = v.len() % COMPACT_NODE_LEN != 0;
+                let number_of_nodes = v.len() / COMPACT_NODE_LEN;
 
                 if data_len_is_multiple_of_node_len {
                     return Err(serde::de::Error::invalid_length(
                         v.len(),
-                        &format!("k*{}", T26IX).as_str(),
+                        &format!("k*{}", COMPACT_NODE_LEN).as_str(),
                     ));
                 }
 
@@ -415,7 +411,7 @@ impl<'de> Deserialize<'de> for Nodes {
                 } else {
                     let mut nodes = Vec::with_capacity(number_of_nodes);
 
-                    for raw_node in v.chunks(T26IX) {
+                    for raw_node in v.chunks(COMPACT_NODE_LEN) {
                         nodes.push(
                             Node::from_compact_bytes(raw_node).map_err(serde::de::Error::custom)?,
                         )
@@ -433,8 +429,6 @@ impl<'de> Deserialize<'de> for Nodes {
 #[cfg(test)]
 mod krpc_tests {
     use crate::{dht::routing_table::Node, util::id::ID};
-
-    use super::Peer;
 
     macro_rules! encoded_with_custom_tid {
         ($start:expr, $tid:expr) => {{

@@ -3,7 +3,7 @@ use bendy::decoding::{FromBencode, Object};
 use bendy::encoding::AsString;
 use tracing::warn;
 
-use crate::constants::SIX;
+use crate::constants::COMPACT_SOCKADDR_LEN;
 use crate::peer::Peer;
 use crate::util::functions::socketaddr_from_compact_bytes;
 
@@ -56,7 +56,7 @@ impl FromBencode for Response {
                         AsString::decode_bencode_object(value).map(|bytes| Some(bytes.0))?
                     {
                         let x = peer_bytes
-                            .chunks_exact(SIX)
+                            .chunks_exact(COMPACT_SOCKADDR_LEN)
                             .filter_map(|compact_peer| {
                                 match socketaddr_from_compact_bytes(compact_peer) {
                                     Ok(peer_addr) => Some(Peer::new(peer_addr)),

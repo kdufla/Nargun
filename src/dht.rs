@@ -8,7 +8,7 @@ use self::{
     routing_table::RoutingTable,
 };
 use crate::{
-    constants::T26IX,
+    constants::COMPACT_PEER_LEN,
     dht::connection::ConCommand,
     peer::{Peer, Peers},
     util::id::ID,
@@ -32,6 +32,7 @@ type PeerMap = HashMap<ID, HashSet<Peer>>;
 
 const MAX_NODE_FETCH_SLEEP: u64 = 60;
 const MAX_PEER_FETCH_SLEEP: u64 = 180;
+const FETCH_PEER_PARALLEL: usize = 3;
 
 #[derive(Debug)]
 pub enum DhtCommand {
@@ -116,38 +117,17 @@ async fn process_incoming_command(
             dht_peer_map,
         ),
         DhtCommand::FindNode(target, tid, from) => {
-            try_find_node(connection, routing_table, &target, from, tid).await?
+            find_node(connection, routing_table, &target, from, tid)?
         }
-        DhtCommand::GetPeers(info_hash, tid, from) => {
-            let vorn = match dht_peer_map.get(&info_hash) {
-                Some(peer_list) => {
-                    let mut rng = thread_rng();
-                    let sample = peer_list
-                        .iter()
-                        .choose_multiple(&mut rng, MTU / T26IX)
-                        .iter()
-                        .map(|x| (*x).clone())
-                        .collect();
-
-                    ValuesOrNodes::Values { values: sample }
-                }
-                None => {
-                    let Some(nodes) = routing_table.find_node(&info_hash) else {
-                        return Err(anyhow!("can't find nodes"));
-                    };
-
-                    ValuesOrNodes::Nodes { nodes }
-                }
-            };
-
-            let (command, _) = ConCommand::new(
-                connection::CommandType::Resp(RespCommand::GetPeers { v_or_n: vorn }, tid),
-                from,
-            );
-
-            connection.send(command).await?
-        }
-        DhtCommand::FetchNodes => fetch_nodes(routing_table, connection).await,
+        DhtCommand::GetPeers(info_hash, tid, from) => get_peers(
+            connection,
+            routing_table,
+            dht_peer_map,
+            info_hash,
+            from,
+            tid,
+        )?,
+        DhtCommand::FetchNodes => fetch_nodes(routing_table, connection),
         DhtCommand::FetchPeers(info_hash) => {
             fetch_peers(routing_table, connection, info_hash).await
         }
@@ -196,7 +176,7 @@ fn store_new_peers(
     }
 }
 
-async fn try_find_node(
+fn find_node(
     connection: &Connection,
     routing_table: &mut RoutingTable,
     target: &ID,
@@ -212,7 +192,59 @@ async fn try_find_node(
         from,
     );
 
-    Ok(connection.send(command).await?)
+    let owned_connection = connection.to_owned();
+    tokio::spawn(async move {
+        if let Err(e) = owned_connection.send(command).await {
+            warn!(?e);
+        }
+    });
+
+    Ok(())
+}
+
+fn get_peers(
+    connection: &Connection,
+    routing_table: &mut RoutingTable,
+    dht_peer_map: &mut PeerMap,
+    info_hash: ID,
+    from: SocketAddrV4,
+    tid: Bytes,
+) -> Result<()> {
+    let values_or_nodes = match dht_peer_map.get(&info_hash) {
+        Some(stored_peers) => {
+            let mut rng = thread_rng();
+
+            ValuesOrNodes::Values {
+                values: stored_peers
+                    .iter()
+                    .choose_multiple(&mut rng, MTU / COMPACT_PEER_LEN)
+                    .iter()
+                    .map(|p| (*p).clone())
+                    .collect(),
+            }
+        }
+        None => {
+            let Some(nodes) = routing_table.find_node(&info_hash) else {
+                return Err(anyhow!("can't find nodes"));
+            };
+
+            ValuesOrNodes::Nodes { nodes }
+        }
+    };
+
+    let (command, _) = ConCommand::new(
+        connection::CommandType::Resp(RespCommand::GetPeers { values_or_nodes }, tid),
+        from,
+    );
+
+    let owned_connection = connection.to_owned();
+    tokio::spawn(async move {
+        if let Err(e) = owned_connection.send(command).await {
+            warn!(?e);
+        }
+    });
+
+    Ok(())
 }
 
 async fn try_ping_node(connection: &Connection, addr: Option<SocketAddrV4>) -> Result<()> {
@@ -232,61 +264,69 @@ async fn ping_node(connection: &Connection, addr: SocketAddrV4) {
     let _ = connection.send(command).await;
 }
 
-async fn fetch_nodes(routing_table: &mut RoutingTable, connection: &Connection) {
+fn fetch_nodes(routing_table: &mut RoutingTable, connection: &Connection) {
+    let targets = get_non_full_bucket_infos(routing_table);
+
+    let owned_connection = connection.to_owned();
+    tokio::spawn(async move {
+        for (id, addr) in targets {
+            let (command, _) = ConCommand::new(
+                CommandType::Query(QueryCommand::FindNode { target: id }),
+                addr,
+            );
+
+            if let Err(e) = owned_connection.send(command).await {
+                warn!(?e);
+            }
+        }
+    });
+}
+
+fn get_non_full_bucket_infos(routing_table: &mut RoutingTable) -> Vec<(ID, SocketAddrV4)> {
+    let mut targets = Vec::new();
+
     for id in routing_table.iter_over_ids_within_fillable_buckets() {
         debug!("fetch_nodes for {:?}", id);
         let node = match routing_table.find_node(&id) {
-            Some(nodes) => match nodes {
-                Nodes::Exact(exact_node) => exact_node,
-                Nodes::Closest(closest_nodes) => match closest_nodes.into_iter().next() {
-                    Some(node) => node,
-                    None => continue,
-                },
+            Some(nodes) => match nodes.iter().next() {
+                Some(node) => node.to_owned(),
+                None => continue,
             },
             None => continue,
         };
 
-        let (command, _) = ConCommand::new(
-            CommandType::Query(QueryCommand::FindNode { target: id }),
-            node.addr,
-        );
-
-        let _ = connection.send(command).await;
+        targets.push((id, node.addr));
     }
+
+    targets
 }
 
 async fn fetch_peers(routing_table: &RoutingTable, connection: &Connection, info_hash: ID) {
-    let mut close_nodes = [None, None, None];
-
-    match routing_table.find_node(&info_hash) {
-        Some(nodes) => match nodes {
-            // TODO this should be done with an iter
-            Nodes::Exact(exact_node) => {
-                close_nodes[0] = Some(exact_node);
-            }
-            Nodes::Closest(closest_nodes) => {
-                for (i, close_node) in closest_nodes
-                    .into_iter()
-                    .take(close_nodes.len())
-                    .enumerate()
-                {
-                    close_nodes[i] = Some(close_node);
-                }
-            }
-        },
-        None => return,
+    let Some(nodes) = routing_table.find_node(&info_hash) else {
+        return;
     };
 
-    for node in close_nodes.into_iter().filter_map(std::convert::identity) {
-        let (command, _) = ConCommand::new(
-            CommandType::Query(QueryCommand::GetPeers {
-                info_hash: info_hash.to_owned(),
-            }),
-            node.addr,
-        );
+    let close_node_addresses: Vec<SocketAddrV4> = nodes
+        .iter()
+        .take(FETCH_PEER_PARALLEL)
+        .map(|node| node.addr)
+        .collect();
 
-        let _ = connection.send(command).await;
-    }
+    let owned_connection = connection.to_owned();
+    tokio::spawn(async move {
+        for addr in close_node_addresses {
+            let (command, _) = ConCommand::new(
+                CommandType::Query(QueryCommand::GetPeers {
+                    info_hash: info_hash.to_owned(),
+                }),
+                addr,
+            );
+
+            if let Err(e) = owned_connection.send(command).await {
+                warn!(?e);
+            }
+        }
+    });
 }
 
 async fn periodically_fetch_nodes(dht_command_tx: mpsc::Sender<DhtCommand>) {

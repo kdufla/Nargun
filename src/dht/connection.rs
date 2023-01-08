@@ -146,9 +146,9 @@ impl Connection {
         match resp {
             RespCommand::Ping => Message::ping_resp(&self.own_id, tid),
             RespCommand::FindNode { nodes } => Message::find_nodes_resp(&self.own_id, nodes, tid),
-            RespCommand::GetPeers { v_or_n } => {
-                Message::get_peers_resp(&self.own_id, token, v_or_n, tid)
-            }
+            RespCommand::GetPeers {
+                values_or_nodes: v_or_n,
+            } => Message::get_peers_resp(&self.own_id, token, v_or_n, tid),
             RespCommand::AnnouncePeer => Message::announce_peer_resp(&self.own_id, tid),
         }
     }
@@ -366,7 +366,7 @@ pub enum QueryCommand {
 pub enum RespCommand {
     Ping,
     FindNode { nodes: Nodes },
-    GetPeers { v_or_n: ValuesOrNodes },
+    GetPeers { values_or_nodes: ValuesOrNodes },
     AnnouncePeer,
 }
 

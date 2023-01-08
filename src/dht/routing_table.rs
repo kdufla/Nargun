@@ -1,5 +1,5 @@
 use super::krpc_message::Nodes;
-use crate::constants::{ID_LEN, T26IX};
+use crate::constants::{COMPACT_NODE_LEN, ID_LEN};
 use crate::util::functions::socketaddr_from_compact_bytes;
 use crate::util::id::ID;
 use anyhow::{anyhow, bail, Result};
@@ -347,7 +347,7 @@ impl Bucket {
 
 impl Node {
     pub fn from_compact_bytes(buff: &[u8]) -> Result<Self> {
-        if buff.len() == T26IX {
+        if buff.len() == COMPACT_NODE_LEN {
             let (id, addr) = buff.split_at(ID_LEN);
 
             Ok(Self {
@@ -359,7 +359,7 @@ impl Node {
             bail!(
                 "Node::from_compact buff size is {}, expected {}",
                 buff.len(),
-                T26IX
+                COMPACT_NODE_LEN
             )
         }
     }
@@ -470,7 +470,7 @@ mod routing_table_tests {
     use tracing_test::traced_test;
 
     use crate::{
-        constants::SIX,
+        constants::COMPACT_SOCKADDR_LEN,
         dht::krpc_message::Nodes,
         util::{functions::socketaddr_from_compact_bytes, id::ID},
     };
@@ -480,7 +480,7 @@ mod routing_table_tests {
     fn random_node() -> (ID, SocketAddrV4) {
         let id = ID(rand::random());
 
-        let raw_addr: [u8; SIX] = rand::random();
+        let raw_addr: [u8; COMPACT_SOCKADDR_LEN] = rand::random();
         let addr = socketaddr_from_compact_bytes(&raw_addr).unwrap();
 
         (id, addr)
