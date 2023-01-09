@@ -346,6 +346,14 @@ impl Bucket {
 }
 
 impl Node {
+    pub fn new_good(id: ID, addr: SocketAddrV4) -> Self {
+        Self {
+            id,
+            addr,
+            last_seen: Some(Instant::now()),
+        }
+    }
+
     pub fn from_compact_bytes(buff: &[u8]) -> Result<Self> {
         if buff.len() == COMPACT_NODE_LEN {
             let (id, addr) = buff.split_at(ID_LEN);

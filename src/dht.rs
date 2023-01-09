@@ -187,7 +187,7 @@ fn find_node(
         return Err(anyhow!("can't find nodes"));
     };
 
-    let (command, _) = ConCommand::new(
+    let command = ConCommand::new(
         connection::CommandType::Resp(RespCommand::FindNode { nodes }, tid),
         from,
     );
@@ -232,7 +232,7 @@ fn get_peers(
         }
     };
 
-    let (command, _) = ConCommand::new(
+    let command = ConCommand::new(
         connection::CommandType::Resp(RespCommand::GetPeers { values_or_nodes }, tid),
         from,
     );
@@ -256,7 +256,7 @@ async fn try_ping_node(connection: &Connection, addr: Option<SocketAddrV4>) -> R
 }
 
 async fn ping_node(connection: &Connection, addr: SocketAddrV4) {
-    let (command, _) = ConCommand::new(
+    let command = ConCommand::new(
         connection::CommandType::Query(connection::QueryCommand::Ping),
         addr,
     );
@@ -270,7 +270,7 @@ fn fetch_nodes(routing_table: &mut RoutingTable, connection: &Connection) {
     let owned_connection = connection.to_owned();
     tokio::spawn(async move {
         for (id, addr) in targets {
-            let (command, _) = ConCommand::new(
+            let command = ConCommand::new(
                 CommandType::Query(QueryCommand::FindNode { target: id }),
                 addr,
             );
@@ -315,7 +315,7 @@ async fn fetch_peers(routing_table: &RoutingTable, connection: &Connection, info
     let owned_connection = connection.to_owned();
     tokio::spawn(async move {
         for addr in close_node_addresses {
-            let (command, _) = ConCommand::new(
+            let command = ConCommand::new(
                 CommandType::Query(QueryCommand::GetPeers {
                     info_hash: info_hash.to_owned(),
                 }),

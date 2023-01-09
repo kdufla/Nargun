@@ -105,7 +105,7 @@ pub enum ValuesOrNodes {
 //     }
 // }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Nodes {
     Exact(Node),
     Closest(Vec<Node>),
@@ -119,72 +119,49 @@ impl Message {
     }
 
     pub fn from_bytes(buf: &[u8]) -> Result<Self> {
-        bendy::serde::from_bytes::<Message>(buf).map_err(|e| anyhow!("{}", e))
+        bendy::serde::from_bytes::<Self>(buf).map_err(|e| anyhow!("{}", e))
     }
 
     pub fn get_tid(&self) -> Bytes {
         match self {
-            Message::Query {
-                transaction_id,
-                msg_type: _,
-                method_name: _,
-                arguments: _,
-            } => transaction_id,
-            Message::Response {
-                transaction_id,
-                msg_type: _,
-                response: _,
-            } => transaction_id,
-            Message::Error {
-                transaction_id,
-                msg_type: _,
-                error: _,
-            } => transaction_id,
+            Self::Query { transaction_id, .. } => transaction_id,
+            Self::Response { transaction_id, .. } => transaction_id,
+            Self::Error { transaction_id, .. } => transaction_id,
         }
         .as_bytes()
     }
 
-    pub fn ping_query(id: &ID) -> (Bytes, Self) {
-        let transaction_id = Bytes::from(Vec::from(rand::random::<TID>()));
-
-        (
-            transaction_id.clone(),
-            Message::Query {
-                transaction_id: SerializableBytes::new(transaction_id),
-                msg_type: MessageType(b'q'),
-                method_name: "ping".to_string(),
-                arguments: Arguments::Ping { id: id.clone() },
-            },
-        )
-    }
-
-    pub fn ping_resp(id: &ID, transaction_id: Bytes) -> Self {
-        Message::Response {
-            transaction_id: SerializableBytes::new(transaction_id),
-            msg_type: MessageType(b'r'),
-            response: Response::Ping { id: id.clone() },
+    pub fn ping_query(id: &ID) -> Self {
+        Self::Query {
+            transaction_id: SerializableBytes::new(Bytes::from(Vec::from(rand::random::<TID>()))),
+            msg_type: MessageType(b'q'),
+            method_name: "ping".to_string(),
+            arguments: Arguments::Ping { id: id.to_owned() },
         }
     }
 
-    pub fn find_nodes_query(id: &ID, target: ID) -> (Bytes, Self) {
-        let transaction_id = Bytes::from(Vec::from(rand::random::<TID>()));
+    pub fn ping_resp(id: &ID, transaction_id: Bytes) -> Self {
+        Self::Response {
+            transaction_id: SerializableBytes::new(transaction_id),
+            msg_type: MessageType(b'r'),
+            response: Response::Ping { id: id.to_owned() },
+        }
+    }
 
-        (
-            transaction_id.clone(),
-            Message::Query {
-                transaction_id: SerializableBytes::new(transaction_id),
-                msg_type: MessageType(b'q'),
-                method_name: "find_node".to_string(),
-                arguments: Arguments::FindNode {
-                    id: id.clone(),
-                    target: target.clone(),
-                },
+    pub fn find_nodes_query(id: &ID, target: &ID) -> Self {
+        Self::Query {
+            transaction_id: SerializableBytes::new(Bytes::from(Vec::from(rand::random::<TID>()))),
+            msg_type: MessageType(b'q'),
+            method_name: "find_node".to_string(),
+            arguments: Arguments::FindNode {
+                id: id.clone(),
+                target: target.to_owned(),
             },
-        )
+        }
     }
 
     pub fn find_nodes_resp(id: &ID, nodes: Nodes, transaction_id: Bytes) -> Self {
-        Message::Response {
+        Self::Response {
             transaction_id: SerializableBytes::new(transaction_id),
             msg_type: MessageType(b'r'),
             response: Response::FindNode {
@@ -194,21 +171,16 @@ impl Message {
         }
     }
 
-    pub fn get_peers_query(id: &ID, info_hash: ID) -> (Bytes, Self) {
-        let transaction_id = Bytes::from(Vec::from(rand::random::<TID>()));
-
-        (
-            transaction_id.clone(),
-            Message::Query {
-                transaction_id: SerializableBytes::new(transaction_id),
-                msg_type: MessageType(b'q'),
-                method_name: "get_peers".to_string(),
-                arguments: Arguments::GetPeers {
-                    id: id.clone(),
-                    info_hash: info_hash.clone(),
-                },
+    pub fn get_peers_query(id: &ID, info_hash: &ID) -> Self {
+        Self::Query {
+            transaction_id: SerializableBytes::new(Bytes::from(Vec::from(rand::random::<TID>()))),
+            msg_type: MessageType(b'q'),
+            method_name: "get_peers".to_string(),
+            arguments: Arguments::GetPeers {
+                id: id.to_owned(),
+                info_hash: info_hash.to_owned(),
             },
-        )
+        }
     }
 
     pub fn get_peers_resp(
@@ -217,46 +189,41 @@ impl Message {
         values_or_nodes: ValuesOrNodes,
         transaction_id: Bytes,
     ) -> Self {
-        Message::Response {
+        Self::Response {
             transaction_id: SerializableBytes::new(transaction_id),
             msg_type: MessageType(b'r'),
             response: Response::GetPeers {
-                id: id.clone(),
+                id: id.to_owned(),
                 token: SerializableBytes::new(token),
                 values_or_nodes,
             },
         }
     }
 
-    pub fn announce_peer_query(id: &ID, info_hash: ID, port: u16, token: Bytes) -> (Bytes, Self) {
-        let transaction_id = Bytes::from(Vec::from(rand::random::<TID>()));
-
-        (
-            transaction_id.clone(),
-            Message::Query {
-                transaction_id: SerializableBytes::new(transaction_id),
-                msg_type: MessageType(b'q'),
-                method_name: "announce_peer".to_string(),
-                arguments: Arguments::AnnouncePeer {
-                    id: id.clone(),
-                    info_hash,
-                    port,
-                    token: SerializableBytes::new(token),
-                },
+    pub fn announce_peer_query(id: &ID, info_hash: &ID, port: u16, token: Bytes) -> Self {
+        Self::Query {
+            transaction_id: SerializableBytes::new(Bytes::from(Vec::from(rand::random::<TID>()))),
+            msg_type: MessageType(b'q'),
+            method_name: "announce_peer".to_string(),
+            arguments: Arguments::AnnouncePeer {
+                id: id.to_owned(),
+                info_hash: info_hash.to_owned(),
+                port,
+                token: SerializableBytes::new(token),
             },
-        )
+        }
     }
 
     pub fn announce_peer_resp(id: &ID, transaction_id: Bytes) -> Self {
-        Message::Response {
+        Self::Response {
             transaction_id: SerializableBytes::new(transaction_id),
             msg_type: MessageType(b'r'),
-            response: Response::Ping { id: id.clone() },
+            response: Response::AnnouncePeer { id: id.to_owned() },
         }
     }
 
     pub fn error_resp(error: Vec<Error>, transaction_id: Bytes) -> Self {
-        Message::Error {
+        Self::Error {
             transaction_id: SerializableBytes::new(transaction_id),
             msg_type: MessageType(b'e'),
             error,
@@ -485,10 +452,15 @@ mod krpc_tests {
 
         #[test]
         fn ping_query() {
-            let (tid, message) = Message::ping_query(&ID([
+            let message = Message::ping_query(&ID([
                 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54, 55, 56,
                 57,
             ]));
+
+            let tid = match &message {
+                Message::Query { transaction_id, .. } => transaction_id.as_bytes(),
+                _ => panic!("expected Message::Query"),
+            };
 
             assert_eq!(
                 bendy::serde::to_bytes(&message).unwrap(),
@@ -514,16 +486,21 @@ mod krpc_tests {
 
         #[test]
         fn find_nodes_query() {
-            let (tid, message) = Message::find_nodes_query(
+            let message = Message::find_nodes_query(
                 &ID([
                     97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54, 55,
                     56, 57,
                 ]),
-                ID([
+                &ID([
                     109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 49, 50,
                     51, 52, 53, 54,
                 ]),
             );
+
+            let tid = match &message {
+                Message::Query { transaction_id, .. } => transaction_id.as_bytes(),
+                _ => panic!("expected Message::Query"),
+            };
 
             assert_eq!(
                 bendy::serde::to_bytes(&message).unwrap(),
@@ -576,16 +553,21 @@ mod krpc_tests {
 
         #[test]
         fn get_peers_query() {
-            let (tid, message) = Message::get_peers_query(
+            let message = Message::get_peers_query(
                 &ID([
                     97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54, 55,
                     56, 57,
                 ]),
-                ID([
+                &ID([
                     109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 49, 50,
                     51, 52, 53, 54,
                 ]),
             );
+
+            let tid = match &message {
+                Message::Query { transaction_id, .. } => transaction_id.as_bytes(),
+                _ => panic!("expected Message::Query"),
+            };
 
             assert_eq!(
                 bendy::serde::to_bytes(&message).unwrap(),
@@ -651,18 +633,23 @@ mod krpc_tests {
 
         #[test]
         fn announce_peer_query() {
-            let (tid, message) = Message::announce_peer_query(
+            let message = Message::announce_peer_query(
                 &ID([
                     97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54, 55,
                     56, 57,
                 ]),
-                ID([
+                &ID([
                     109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 49, 50,
                     51, 52, 53, 54,
                 ]),
                 6881,
                 Bytes::from_static(b"aoeusnth"),
             );
+
+            let tid = match &message {
+                Message::Query { transaction_id, .. } => transaction_id.as_bytes(),
+                _ => panic!("expected Message::Query"),
+            };
 
             assert_eq!(
                 bendy::serde::to_bytes(&message).unwrap(),

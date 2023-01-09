@@ -1,20 +1,22 @@
+pub mod command;
+pub mod pending;
+pub use self::command::{CommandType, ConCommand, QueryCommand, RespCommand};
+pub use self::pending::{PendingRequests, RequestType};
 use super::krpc_message::{Arguments, Message, Nodes, Response, ValuesOrNodes};
+use super::routing_table::Node;
 use super::DhtCommand;
 use crate::gateway_device::LOCAL_PORT_UDP;
 use crate::peer::Peer;
 use crate::util::id::ID;
 use bytes::Bytes;
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::net::SocketAddrV4;
 use std::sync::Arc;
-use std::sync::Mutex;
 use tokio::net::UdpSocket;
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::SendError;
-use tokio::sync::oneshot;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, warn};
 
 pub const MTU: usize = 1300;
 
@@ -61,21 +63,19 @@ impl Connection {
             .await
             .unwrap();
 
-        info!(?sock);
-
         let secret = ID(rand::random());
 
         let sock_send = Arc::new(sock);
         let sock_recv = sock_send.clone();
 
-        let pending = PendingRequests::new(); //TODO
+        let pending = PendingRequests::new();
 
         select! {
             _ = self.manage_sender(conn_command_rx, sock_send, secret.clone(), pending.clone()) => {},
             _ = self.manage_receiver(sock_recv, dht_command_tx, secret, pending.clone()) => {},
         }
 
-        debug!("unreachable! select should not exit");
+        error!("unreachable! select should not exit");
     }
 
     async fn manage_sender(
@@ -89,16 +89,13 @@ impl Connection {
             let Some(command) = conn_command_rx.recv().await else {break};
             debug!(?command);
 
-            let token = secret.hash_as_bytes(&command.target.ip().octets());
+            let target = command.target.to_owned();
 
-            let message = match command.command_type {
-                CommandType::Query(query) => {
-                    let (tid, message) = self.build_query_from_command(query);
-                    pending.insert(tid, Self::get_type(&message));
-                    message
-                }
-                CommandType::Resp(resp, tid) => self.build_resp_from_command(resp, tid, token),
-            };
+            let message: Message = command.into_message(&self.own_id, &secret);
+
+            if let Message::Query { transaction_id, .. } = &message {
+                pending.insert(transaction_id.as_bytes(), (&message).into());
+            }
 
             debug!("send {:?}", message);
 
@@ -110,48 +107,12 @@ impl Connection {
                 }
             };
 
-            if let Err(e) = sock.send_to(&message, command.target).await {
-                warn!(?e);
-            };
-        }
-    }
-
-    fn get_type(message: &Message) -> RequestType {
-        let Message::Query{arguments, ..} = message else{
-            panic!("this should be a query");
-        };
-
-        match arguments {
-            Arguments::Ping { .. } => RequestType::Ping,
-            Arguments::FindNode { target, .. } => RequestType::FindNode(target.to_owned()),
-            Arguments::GetPeers { info_hash, .. } => RequestType::GetPeers(info_hash.to_owned()),
-            Arguments::AnnouncePeer { .. } => RequestType::AnnouncePeer,
-        }
-    }
-
-    fn build_query_from_command(&self, query: QueryCommand) -> (Bytes, Message) {
-        match query {
-            QueryCommand::Ping => Message::ping_query(&self.own_id),
-            QueryCommand::FindNode { target } => Message::find_nodes_query(&self.own_id, target),
-            QueryCommand::GetPeers { info_hash } => {
-                Message::get_peers_query(&self.own_id, info_hash)
-            }
-            QueryCommand::AnnouncePeer {
-                info_hash,
-                port,
-                token,
-            } => Message::announce_peer_query(&self.own_id, info_hash, port, token),
-        }
-    }
-
-    fn build_resp_from_command(&self, resp: RespCommand, tid: Bytes, token: Bytes) -> Message {
-        match resp {
-            RespCommand::Ping => Message::ping_resp(&self.own_id, tid),
-            RespCommand::FindNode { nodes } => Message::find_nodes_resp(&self.own_id, nodes, tid),
-            RespCommand::GetPeers {
-                values_or_nodes: v_or_n,
-            } => Message::get_peers_resp(&self.own_id, token, v_or_n, tid),
-            RespCommand::AnnouncePeer => Message::announce_peer_resp(&self.own_id, tid),
+            let cloned_sock = sock.clone();
+            tokio::spawn(async move {
+                if let Err(e) = cloned_sock.send_to(&message, target).await {
+                    warn!(?e);
+                };
+            });
         }
     }
 
@@ -164,9 +125,14 @@ impl Connection {
     ) {
         let mut buf = [0u8; MTU];
 
-        while let Ok((bytes_read, from_addr)) = sock.recv_from(&mut buf).await {
-            trace!("rec raw {:?}", buf);
+        let handler = ReceivedMessageHandler::new(
+            self.conn_command_tx.to_owned(),
+            dht_command_tx,
+            secret,
+            pending,
+        );
 
+        while let Ok((_, from_addr)) = sock.recv_from(&mut buf).await {
             let message = match Message::from_bytes(&buf) {
                 Ok(message) => {
                     debug!("rec {:?}", message);
@@ -178,19 +144,34 @@ impl Connection {
                 }
             };
 
-            self.handle_message(message, from_addr, &dht_command_tx, &pending, &secret)
-                .await;
+            handler.handle_message(message, from_addr);
+        }
+    }
+}
+
+struct ReceivedMessageHandler {
+    conn_command_tx: mpsc::Sender<ConCommand>,
+    dht_command_tx: mpsc::Sender<DhtCommand>,
+    secret: ID,
+    pending: PendingRequests,
+}
+
+impl ReceivedMessageHandler {
+    fn new(
+        conn_command_tx: mpsc::Sender<ConCommand>,
+        dht_command_tx: mpsc::Sender<DhtCommand>,
+        secret: ID,
+        pending: PendingRequests,
+    ) -> Self {
+        Self {
+            conn_command_tx,
+            dht_command_tx,
+            secret,
+            pending,
         }
     }
 
-    async fn handle_message(
-        &self,
-        message: Message,
-        from: SocketAddr,
-        dht_command_tx: &mpsc::Sender<DhtCommand>,
-        pending: &PendingRequests,
-        secret: &ID,
-    ) {
+    fn handle_message(&self, message: Message, from: SocketAddr) {
         let  SocketAddr::V4(from) = from else {
             info!("IPv6 request dropped");
             return;
@@ -201,219 +182,123 @@ impl Connection {
                 transaction_id,
                 arguments,
                 ..
-            } => {
-                Self::handle_query(
-                    transaction_id.into_bytes(),
-                    arguments,
-                    from,
-                    &self.conn_command_tx,
-                    dht_command_tx,
-                    secret,
-                )
-                .await
-            }
+            } => self.handle_query(transaction_id.into_bytes(), arguments, from),
             Message::Response {
                 transaction_id,
                 response,
                 ..
-            } => {
-                Self::handle_resp(
-                    transaction_id.into_bytes(),
-                    response,
-                    from,
-                    dht_command_tx,
-                    pending,
-                )
-                .await
-            }
+            } => self.handle_resp(transaction_id.into_bytes(), response, from),
             Message::Error { .. } => todo!(),
         }
     }
 
-    async fn handle_query(
-        transaction_id: Bytes,
-        arguments: Arguments,
-        from: SocketAddrV4,
-        conn_command_tx: &mpsc::Sender<ConCommand>,
-        dht_command_tx: &mpsc::Sender<DhtCommand>,
-        secret: &ID,
-    ) {
+    fn handle_query(&self, transaction_id: Bytes, arguments: Arguments, from: SocketAddrV4) {
         match arguments {
             Arguments::Ping { .. } => {
-                let (command, _) =
-                    ConCommand::new(CommandType::Resp(RespCommand::Ping, transaction_id), from);
-                let _ = conn_command_tx.send(command).await;
+                self.conn_send(ConCommand::new(
+                    CommandType::Resp(RespCommand::Ping, transaction_id),
+                    from,
+                ));
             }
             Arguments::FindNode { target, .. } => {
-                let _ = dht_command_tx
-                    .send(DhtCommand::FindNode(target, transaction_id, from))
-                    .await;
+                self.dht_send(DhtCommand::FindNode(target, transaction_id, from));
             }
             Arguments::GetPeers { info_hash, .. } => {
-                let _ = dht_command_tx
-                    .send(DhtCommand::GetPeers(info_hash, transaction_id, from))
-                    .await;
+                self.dht_send(DhtCommand::GetPeers(info_hash, transaction_id, from));
             }
             Arguments::AnnouncePeer {
+                id,
                 info_hash,
                 port,
                 token,
-                ..
             } => {
-                let correct_token = secret.hash_as_bytes(&from.ip().octets());
-
-                if correct_token == token.into_bytes() {
-                    let mut peer_addr = from.clone();
-                    peer_addr.set_port(port);
-                    let peer = Peer::new(peer_addr);
-                    let _ = dht_command_tx
-                        .send(DhtCommand::NewPeers(vec![peer], info_hash.to_owned()))
-                        .await;
-
-                    let (command, _) = ConCommand::new(
+                if self.token_is_valid(token.into_bytes(), &from) {
+                    self.store_node(from.to_owned(), port, info_hash, id);
+                    self.conn_send(ConCommand::new(
                         CommandType::Resp(RespCommand::AnnouncePeer, transaction_id),
                         from,
-                    );
-                    let _ = conn_command_tx.send(command).await;
+                    ))
                 }
             }
         }
     }
 
-    async fn handle_resp(
-        transaction_id: Bytes,
-        response: Response,
-        from: SocketAddrV4,
-        dht_command_tx: &mpsc::Sender<DhtCommand>,
-        pending: &PendingRequests,
-    ) {
-        let Some(pending_request) = pending.get(&transaction_id) else {
+    fn token_is_valid(&self, token: Bytes, source_addr: &SocketAddrV4) -> bool {
+        token == self.secret.hash_as_bytes(&source_addr.ip().octets())
+    }
+
+    fn store_node(&self, from: SocketAddrV4, peer_port: u16, info_hash: ID, id: ID) {
+        let mut peer_addr = from.clone();
+        peer_addr.set_port(peer_port);
+        let peer = Peer::new(peer_addr);
+
+        self.dht_send(DhtCommand::NewPeers(vec![peer], info_hash.to_owned()));
+
+        self.dht_send(DhtCommand::NewNodes(Nodes::Exact(Node::new_good(id, from))));
+    }
+
+    fn handle_resp(&self, transaction_id: Bytes, response: Response, from: SocketAddrV4) {
+        let Some(pending_request) = self.pending.get(&transaction_id) else {
             warn!("resp from an unknown node");
             return;
         };
 
+        let response_type: RequestType = (&response).into();
+        if std::mem::discriminant(&pending_request) != std::mem::discriminant(&response_type) {
+            warn!("resp on pending req has different type");
+            return;
+        }
+
         match response {
             Response::Ping { id } => {
-                if !matches!(pending_request, RequestType::Ping) {
-                    return;
-                }
-
-                let _ = dht_command_tx.send(DhtCommand::Touch(id, from)).await;
+                self.dht_send(DhtCommand::Touch(id, from));
             }
             Response::FindNode { id, nodes } => {
-                if !matches!(pending_request, RequestType::FindNode(_)) {
-                    return;
-                };
-
-                let _ = dht_command_tx.send(DhtCommand::Touch(id, from)).await;
-                let _ = dht_command_tx.send(DhtCommand::NewNodes(nodes)).await;
+                self.dht_send(DhtCommand::Touch(id, from));
+                self.dht_send(DhtCommand::NewNodes(nodes));
             }
             Response::GetPeers {
                 id,
-                token,
                 values_or_nodes,
+                ..
             } => {
                 // TODO token
                 let RequestType::GetPeers(info_hash) = pending_request else {
                     return;
                 };
 
-                let _ = dht_command_tx.send(DhtCommand::Touch(id, from)).await;
+                self.dht_send(DhtCommand::Touch(id, from));
 
                 match values_or_nodes {
                     ValuesOrNodes::Values { values } => {
-                        let _ = dht_command_tx
-                            .send(DhtCommand::NewPeers(values, info_hash.to_owned()))
-                            .await;
+                        self.dht_send(DhtCommand::NewPeers(values, info_hash.to_owned()));
                     }
                     ValuesOrNodes::Nodes { nodes } => {
-                        let _ = dht_command_tx.send(DhtCommand::NewNodes(nodes)).await;
+                        self.dht_send(DhtCommand::NewNodes(nodes));
                     }
                 }
             }
             Response::AnnouncePeer { id } => {
-                if !matches!(pending_request, RequestType::AnnouncePeer) {
-                    return;
-                }
-
-                let _ = dht_command_tx.send(DhtCommand::Touch(id, from)).await;
+                self.dht_send(DhtCommand::Touch(id, from));
             }
         }
     }
-}
 
-#[derive(Debug)]
-pub enum CommandType {
-    Query(QueryCommand),
-    Resp(RespCommand, Bytes),
-}
-
-#[derive(Debug)]
-pub enum QueryCommand {
-    Ping,
-    FindNode {
-        target: ID,
-    },
-    GetPeers {
-        info_hash: ID,
-    },
-    AnnouncePeer {
-        info_hash: ID,
-        port: u16,
-        token: Bytes,
-    },
-}
-
-#[derive(Debug)]
-pub enum RespCommand {
-    Ping,
-    FindNode { nodes: Nodes },
-    GetPeers { values_or_nodes: ValuesOrNodes },
-    AnnouncePeer,
-}
-
-#[derive(Debug)]
-pub struct ConCommand {
-    pub command_type: CommandType,
-    pub target: SocketAddrV4,
-    pub response_channel: oneshot::Sender<u64>,
-}
-
-impl ConCommand {
-    pub fn new(command: CommandType, target: SocketAddrV4) -> (Self, oneshot::Receiver<u64>) {
-        let (tx, rx) = oneshot::channel();
-        (
-            Self {
-                command_type: command,
-                target,
-                response_channel: tx,
-            },
-            rx,
-        )
-    }
-}
-
-#[derive(Clone, Debug)]
-enum RequestType {
-    Ping,
-    FindNode(ID),
-    GetPeers(ID),
-    AnnouncePeer,
-}
-
-#[derive(Clone, Debug)]
-struct PendingRequests(Arc<Mutex<HashMap<Bytes, RequestType>>>);
-
-impl PendingRequests {
-    pub fn new() -> Self {
-        Self(Arc::new(Mutex::new(HashMap::<Bytes, RequestType>::new())))
+    fn conn_send(&self, command: ConCommand) {
+        let cloned_tx = self.conn_command_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = cloned_tx.send(command).await {
+                warn!(?e);
+            };
+        });
     }
 
-    pub fn get(&self, k: &Bytes) -> Option<RequestType> {
-        self.0.lock().unwrap().get(k).cloned()
-    }
-
-    pub fn insert(&mut self, k: Bytes, v: RequestType) -> Option<RequestType> {
-        self.0.lock().unwrap().insert(k, v)
+    fn dht_send(&self, command: DhtCommand) {
+        let cloned_tx = self.dht_command_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = cloned_tx.send(command).await {
+                warn!(?e);
+            };
+        });
     }
 }
