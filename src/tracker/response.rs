@@ -66,10 +66,7 @@ impl FromBencode for Response {
                                     }
                                 }
                             })
-                            // .map(socketaddr_from_compact_bytes)
-                            // .filter(Result::is_ok)
-                            // .map(Result::unwrap)
-                            .collect(); // TODO wtf did i just do. no need for two maps and needs error H
+                            .collect();
 
                         peers = Some(x);
                     }

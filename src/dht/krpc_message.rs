@@ -96,15 +96,6 @@ pub enum ValuesOrNodes {
     Nodes { nodes: Nodes },
 }
 
-// #[derive(Debug, PartialEq, Eq)]
-// pub struct Peer(SocketAddrV4);
-
-// impl From<Peer> for SocketAddrV4 {
-//     fn from(item: Peer) -> Self {
-//         item.0
-//     }
-// }
-
 #[derive(Debug, Clone)]
 pub enum Nodes {
     Exact(Node),
@@ -1124,6 +1115,9 @@ mod krpc_tests {
         fn announce_peer_resp() {
             // I don't see a way to differentiate this and ping response
             // I doubt it matters tho, let's TODO but probably not
+            // future G here: it can be identified with tid
+            // everything else is self-describing..
+            // I'm not a fan of this protocol
         }
 
         #[test]
