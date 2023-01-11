@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
     // console_subscriber::init();
 
     // env::set_var("RUST_BACKTRACE", "1");
-    // let peer_id = ID(rand::random());
+    // let peer_id = ID::new(rand::random());
 
     let config = config::Config::new();
     let torrent = metainfo::from_file(&config.file);
@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
     let (tx, rx) = mpsc::channel(12);
 
     tokio::spawn(async move {
-        dht(peers, ID(torrent.info_hash.clone()), rx).await;
+        dht(peers, ID::new(torrent.info_hash.clone()), rx).await;
     });
 
     let _ = tx.send(addr).await;
@@ -95,7 +95,7 @@ async fn main() -> Result<()> {
     // let pc = PeerConnection::new(
     //     peer_id,
     //     peer_sa,
-    //     ID(torrent.info_hash),
+    //     ID::new(torrent.info_hash),
     //     info,
     //     torrent.info.piece_length as u32,
     //     pieces,

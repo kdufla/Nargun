@@ -306,7 +306,7 @@ impl<'a> Iterator for NodesIter<'a> {
 
 macro_rules! push_node_bytes_to_vec {
     ($vec:ident, $node:ident) => {{
-        $vec.extend_from_slice($node.id.as_bytes());
+        $vec.extend_from_slice($node.id.as_byte_ref());
         $vec.extend_from_slice(&$node.addr.ip().octets());
         $vec.push(($node.addr.port() >> 8) as u8);
         $vec.push(($node.addr.port() & 0xff) as u8);
@@ -412,7 +412,7 @@ mod krpc_tests {
         assert_eq!(result.addr.to_string(), "121.104.102.53:24929");
         assert_eq!(
             result.id,
-            ID([
+            ID::new([
                 b'q', b'w', b'e', b'r', b't', b'y', b'u', b'i', b'o', b'p', b'a', b's', b'd', b'f',
                 b'g', b'h', b'j', b'k', b'l', b'z'
             ])
@@ -443,7 +443,7 @@ mod krpc_tests {
 
         #[test]
         fn ping_query() {
-            let message = Message::ping_query(&ID([
+            let message = Message::ping_query(&ID::new([
                 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54, 55, 56,
                 57,
             ]));
@@ -462,7 +462,7 @@ mod krpc_tests {
         #[test]
         fn ping_resp() {
             let message = Message::ping_resp(
-                &ID([
+                &ID::new([
                     109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 49, 50,
                     51, 52, 53, 54,
                 ]),
@@ -478,11 +478,11 @@ mod krpc_tests {
         #[test]
         fn find_nodes_query() {
             let message = Message::find_nodes_query(
-                &ID([
+                &ID::new([
                     97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54, 55,
                     56, 57,
                 ]),
-                &ID([
+                &ID::new([
                     109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 49, 50,
                     51, 52, 53, 54,
                 ]),
@@ -505,7 +505,7 @@ mod krpc_tests {
         #[test]
         fn find_nodes_resp_closest() {
             let message = Message::find_nodes_resp(
-                &ID([
+                &ID::new([
                     48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 97, 98, 99, 100, 101, 102, 103, 104,
                     105, 106,
                 ]),
@@ -526,7 +526,7 @@ mod krpc_tests {
         #[test]
         fn find_nodes_resp_exact() {
             let message = Message::find_nodes_resp(
-                &ID([
+                &ID::new([
                     48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 97, 98, 99, 100, 101, 102, 103, 104,
                     105, 106,
                 ]),
@@ -545,11 +545,11 @@ mod krpc_tests {
         #[test]
         fn get_peers_query() {
             let message = Message::get_peers_query(
-                &ID([
+                &ID::new([
                     97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54, 55,
                     56, 57,
                 ]),
-                &ID([
+                &ID::new([
                     109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 49, 50,
                     51, 52, 53, 54,
                 ]),
@@ -572,7 +572,7 @@ mod krpc_tests {
         #[test]
         fn get_peers_resp_vals() {
             let message = Message::get_peers_resp(
-                &ID([
+                &ID::new([
                     97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54, 55,
                     56, 57,
                 ]),
@@ -601,7 +601,7 @@ mod krpc_tests {
         #[test]
         fn get_peers_resp_nodes() {
             let message = Message::get_peers_resp(
-                &ID([
+                &ID::new([
                     97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54, 55,
                     56, 57,
                 ]),
@@ -625,11 +625,11 @@ mod krpc_tests {
         #[test]
         fn announce_peer_query() {
             let message = Message::announce_peer_query(
-                &ID([
+                &ID::new([
                     97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54, 55,
                     56, 57,
                 ]),
-                &ID([
+                &ID::new([
                     109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 49, 50,
                     51, 52, 53, 54,
                 ]),
@@ -654,7 +654,7 @@ mod krpc_tests {
         #[test]
         fn announce_peer_resp() {
             let message = Message::announce_peer_resp(
-                &ID([
+                &ID::new([
                     109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 49, 50,
                     51, 52, 53, 54,
                 ]),
@@ -713,7 +713,7 @@ mod krpc_tests {
                 assert!(matches!(a, Arguments::Ping { .. }));
                 if let Arguments::Ping { id } = a {
                     assert_eq!(
-                        ID([
+                        ID::new([
                             97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53,
                             54, 55, 56, 57
                         ]),
@@ -745,7 +745,7 @@ mod krpc_tests {
                 assert!(matches!(r, Response::Ping { .. }));
                 if let Response::Ping { id } = r {
                     assert_eq!(
-                        ID([
+                        ID::new([
                             109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122,
                             49, 50, 51, 52, 53, 54
                         ]),
@@ -780,7 +780,7 @@ mod krpc_tests {
                 assert!(matches!(a, Arguments::FindNode { .. }));
                 if let Arguments::FindNode { id, target } = a {
                     assert_eq!(
-                        ID([
+                        ID::new([
                             97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53,
                             54, 55, 56, 57
                         ]),
@@ -788,7 +788,7 @@ mod krpc_tests {
                     );
 
                     assert_eq!(
-                        ID([
+                        ID::new([
                             109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122,
                             49, 50, 51, 52, 53, 54
                         ]),
@@ -821,7 +821,7 @@ mod krpc_tests {
                 assert!(matches!(r, Response::FindNode { .. }));
                 if let Response::FindNode { id, nodes } = r {
                     assert_eq!(
-                        ID([
+                        ID::new([
                             48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 97, 98, 99, 100, 101, 102, 103,
                             104, 105, 106
                         ]),
@@ -833,7 +833,7 @@ mod krpc_tests {
                         assert_eq!(node_list.len(), 3);
                         assert_eq!(
                             node_list[1].id,
-                            ID([
+                            ID::new([
                                 b'7', b'Z', b'5', b'c', b'Q', b'S', b'c', b'm', b'Z', b'c', b'C',
                                 b'4', b'M', b'2', b'h', b'Y', b'K', b'y', b'!', b'J',
                             ])
@@ -868,7 +868,7 @@ mod krpc_tests {
                 assert!(matches!(r, Response::FindNode { .. }));
                 if let Response::FindNode { id, nodes } = r {
                     assert_eq!(
-                        ID([
+                        ID::new([
                             48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 97, 98, 99, 100, 101, 102, 103,
                             104, 105, 106
                         ]),
@@ -879,7 +879,7 @@ mod krpc_tests {
                     if let Nodes::Exact(node) = nodes {
                         assert_eq!(
                             node.id,
-                            ID([
+                            ID::new([
                                 b'r', b'd', b'Y', b'A', b'x', b'W', b'C', b'9', b'Z', b'i', b'!',
                                 b'A', b'9', b'7', b'z', b'K', b'J', b'U', b'b', b'H'
                             ])
@@ -917,7 +917,7 @@ mod krpc_tests {
                 assert!(matches!(a, Arguments::GetPeers { .. }));
                 if let Arguments::GetPeers { id, info_hash } = a {
                     assert_eq!(
-                        ID([
+                        ID::new([
                             97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53,
                             54, 55, 56, 57
                         ]),
@@ -925,7 +925,7 @@ mod krpc_tests {
                     );
 
                     assert_eq!(
-                        ID([
+                        ID::new([
                             109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122,
                             49, 50, 51, 52, 53, 54
                         ]),
@@ -963,7 +963,7 @@ mod krpc_tests {
                 } = r
                 {
                     assert_eq!(
-                        ID([
+                        ID::new([
                             97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53,
                             54, 55, 56, 57
                         ]),
@@ -1023,7 +1023,7 @@ mod krpc_tests {
                 } = r
                 {
                     assert_eq!(
-                        ID([
+                        ID::new([
                             97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53,
                             54, 55, 56, 57
                         ]),
@@ -1039,7 +1039,7 @@ mod krpc_tests {
                             assert_eq!(node_list.len(), 3);
                             assert_eq!(
                                 node_list[1].id,
-                                ID([
+                                ID::new([
                                     b'7', b'Z', b'5', b'c', b'Q', b'S', b'c', b'm', b'Z', b'c',
                                     b'C', b'4', b'M', b'2', b'h', b'Y', b'K', b'y', b'!', b'J',
                                 ])
@@ -1085,7 +1085,7 @@ mod krpc_tests {
                 } = a
                 {
                     assert_eq!(
-                        ID([
+                        ID::new([
                             97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53,
                             54, 55, 56, 57
                         ]),
@@ -1093,7 +1093,7 @@ mod krpc_tests {
                     );
 
                     assert_eq!(
-                        ID([
+                        ID::new([
                             109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122,
                             49, 50, 51, 52, 53, 54
                         ]),

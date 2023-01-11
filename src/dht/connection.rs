@@ -63,7 +63,7 @@ impl Connection {
             .await
             .unwrap();
 
-        let secret = ID(rand::random());
+        let secret = ID::new(rand::random());
 
         let sock_send = Arc::new(sock);
         let sock_recv = sock_send.clone();

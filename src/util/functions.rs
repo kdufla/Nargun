@@ -18,7 +18,7 @@ pub fn ok_or_missing_field<T>(
 
 pub fn vec_to_id(v: Vec<u8>) -> ID {
     // TODO should not unwrap, improve error handling
-    ID(v.try_into().unwrap())
+    ID::new(v.try_into().unwrap())
 }
 
 pub fn socketaddr_from_compact_bytes(buff: &[u8]) -> Result<SocketAddrV4> {

@@ -10,7 +10,7 @@ use std::{
 };
 
 #[derive(Clone, Hash)]
-pub struct ID(pub [u8; ID_LEN]); // TODO this should not be pub
+pub struct ID([u8; ID_LEN]);
 
 impl<'de> Deserialize<'de> for ID {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -119,12 +119,12 @@ impl ID {
 
     pub fn hash_as_bytes(&self, secret: &[u8]) -> Bytes {
         let mut hasher = sha::Sha1::new();
-        hasher.update(self.as_bytes());
+        hasher.update(self.as_byte_ref());
         hasher.update(secret);
         Bytes::from(Vec::from(hasher.finish()))
     }
 
-    pub fn as_bytes(&self) -> &[u8] {
+    pub fn as_byte_ref(&self) -> &[u8] {
         self.0.as_ref()
     }
 
@@ -281,7 +281,7 @@ mod tests {
 
     #[test]
     fn xor() {
-        let left = ID([
+        let left = ID::new([
             0,
             0,
             0,
@@ -303,7 +303,7 @@ mod tests {
             0,
             0xff,
         ]);
-        let right = ID([
+        let right = ID::new([
             0xff,
             0xff,
             0,
@@ -325,7 +325,7 @@ mod tests {
             0,
             0,
         ]);
-        let res = ID([
+        let res = ID::new([
             0xff,
             0xff,
             0,
@@ -353,8 +353,8 @@ mod tests {
 
     #[test]
     fn sub() {
-        let left = ID(rand::random());
-        let right = ID(rand::random());
+        let left = ID::new(rand::random());
+        let right = ID::new(rand::random());
 
         assert_eq!(&left ^ &right, &left - &right);
         assert_eq!(&left ^ &right, &right - &left);
@@ -364,18 +364,20 @@ mod tests {
     fn weight() {
         assert_eq!(
             51,
-            ID([1, 1, 1, 1, 1, 0xFF, 0xFF, 0, 0x11, 0xFF, 0xFF, 0xFF, 1, 0, 0, 0, 0, 0, 1, 5,])
-                .weight()
+            ID::new([
+                1, 1, 1, 1, 1, 0xFF, 0xFF, 0, 0x11, 0xFF, 0xFF, 0xFF, 1, 0, 0, 0, 0, 0, 1, 5,
+            ])
+            .weight()
         );
     }
 
     #[test]
     fn randomize() {
-        let mut id = ID([0; 20]);
+        let mut id = ID::new([0; 20]);
 
         for _ in 0..64 {
             id.randomize_after_bit(8 + 2);
-            assert!(id.as_bytes()[1] <= 0b0001_1111);
+            assert!(id.as_byte_ref()[1] <= 0b0001_1111);
         }
 
         assert!(id.weight() > 0);

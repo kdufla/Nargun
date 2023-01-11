@@ -26,10 +26,10 @@ impl Announce {
         let mut s = self.tracker_url.clone();
 
         s.push_str("?info_hash=");
-        s.push_str(urlencoding::encode_binary(&self.info_hash.0).as_ref());
+        s.push_str(urlencoding::encode_binary(&self.info_hash.as_byte_ref()).as_ref());
 
         s.push_str("&peer_id=");
-        s.push_str(urlencoding::encode_binary(&self.peer_id.0).as_ref());
+        s.push_str(urlencoding::encode_binary(&self.peer_id.as_byte_ref()).as_ref());
 
         s.push_str("&port=");
         s.push_str(&self.port.to_string());
@@ -72,21 +72,24 @@ impl Announce {
 #[cfg(test)]
 mod tests {
     use super::{Announce, AnnounceEvent};
-    use crate::util::id::ID;
+    use crate::{constants::ID_LEN, util::id::ID};
 
     const TRACKER_URL: &str = "http://example.com/announce";
-    const INFO_HASH: ID = ID([1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0]);
-    const PEER_ID: ID = ID([
+    const INFO_HASH: [u8; ID_LEN] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
+    const PEER_ID: [u8; ID_LEN] = [
         11, 22, 33, 44, 55, 66, 77, 88, 99, 0, 11, 22, 33, 44, 55, 66, 77, 88, 99, 0,
-    ]);
+    ];
     const ENCODED_URL: &str = "http://example.com/announce?info_hash=%01%02%03%04%05%06%07%08%09%00%01%02%03%04%05%06%07%08%09%00&peer_id=%0B%16%21%2C7BMXc%00%0B%16%21%2C7BMXc%00&port=6887&uploaded=776241&downloaded=277518&left=78907&compact=1&event=started";
 
     #[test]
     fn announce_as_url() {
+        let info_hash = ID::new(INFO_HASH);
+        let peer_id = ID::new(PEER_ID);
+
         let announce = Announce {
             tracker_url: TRACKER_URL.to_string(),
-            info_hash: INFO_HASH,
-            peer_id: PEER_ID,
+            info_hash,
+            peer_id,
             port: 6887,
             uploaded: 776241,
             downloaded: 277518,

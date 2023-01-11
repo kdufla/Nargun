@@ -359,7 +359,7 @@ impl Node {
             let (id, addr) = buff.split_at(ID_LEN);
 
             Ok(Self {
-                id: ID(id.try_into()?),
+                id: ID::new(id.try_into()?),
                 addr: socketaddr_from_compact_bytes(addr)?,
                 last_seen: None,
             })
@@ -486,7 +486,7 @@ mod routing_table_tests {
     use super::{RoutingTable, TreeNode, K_NODE_PER_BUCKET};
 
     fn random_node() -> (ID, SocketAddrV4) {
-        let id = ID(rand::random());
+        let id = ID::new(rand::random());
 
         let raw_addr: [u8; COMPACT_SOCKADDR_LEN] = rand::random();
         let addr = socketaddr_from_compact_bytes(&raw_addr).unwrap();
@@ -515,7 +515,7 @@ mod routing_table_tests {
     #[traced_test]
     #[test]
     fn basic_setup() {
-        let mut rt = RoutingTable::new(ID(rand::random()));
+        let mut rt = RoutingTable::new(ID::new(rand::random()));
 
         let (id, addr) = random_node();
 
@@ -526,7 +526,7 @@ mod routing_table_tests {
 
     #[test]
     fn no_duplicates() {
-        let mut rt = RoutingTable::new(ID(rand::random()));
+        let mut rt = RoutingTable::new(ID::new(rand::random()));
 
         let (id, addr) = random_node();
 
@@ -539,7 +539,7 @@ mod routing_table_tests {
 
     #[test]
     fn split() {
-        let mut rt = RoutingTable::new(ID(rand::random()));
+        let mut rt = RoutingTable::new(ID::new(rand::random()));
         let (mut id, addr) = random_node();
 
         for i in 0..K_NODE_PER_BUCKET {
@@ -563,7 +563,7 @@ mod routing_table_tests {
 
     #[test]
     fn when_first_split_is_not_enough() {
-        let mut rt = RoutingTable::new(ID(rand::random()));
+        let mut rt = RoutingTable::new(ID::new(rand::random()));
         let (mut id, addr) = random_node();
 
         for i in 0..K_NODE_PER_BUCKET {
@@ -598,7 +598,7 @@ mod routing_table_tests {
 
     #[test]
     fn find_exact_node() {
-        let mut rt = RoutingTable::new(ID(rand::random()));
+        let mut rt = RoutingTable::new(ID::new(rand::random()));
         let (mut id, addr) = random_node();
 
         let og_id = id.to_owned();
@@ -624,7 +624,7 @@ mod routing_table_tests {
 
     #[test]
     fn find_closest_nodes() {
-        let mut rt = RoutingTable::new(ID(rand::random()));
+        let mut rt = RoutingTable::new(ID::new(rand::random()));
         let (target_id, _) = random_node();
 
         for _ in 0..260 {
@@ -645,7 +645,7 @@ mod routing_table_tests {
 
     macro_rules! zero_id_with_first {
         ($first:expr) => {
-            ID([
+            ID::new([
                 $first, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             ])
         };

@@ -105,9 +105,9 @@ mod tests {
 
     #[test]
     fn query_into_message() {
-        let info_hash = ID(rand::random());
-        let own_node_id = ID(rand::random());
-        let secret = ID(rand::random());
+        let info_hash = ID::new(rand::random());
+        let own_node_id = ID::new(rand::random());
+        let secret = ID::new(rand::random());
 
         let query_command = ConCommand::new(
             CommandType::Query(QueryCommand::GetPeers {
@@ -129,8 +129,8 @@ mod tests {
 
     #[test]
     fn resp_into_message() {
-        let own_node_id = ID(rand::random());
-        let secret = ID(rand::random());
+        let own_node_id = ID::new(rand::random());
+        let secret = ID::new(rand::random());
 
         let tid = Bytes::from_static(b"bytes");
         let nodes = Nodes::Exact(

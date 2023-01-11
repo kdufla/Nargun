@@ -67,7 +67,7 @@ fn setup(
     peers: &Peers,
     info_hash: ID,
 ) -> (RoutingTable, Connection, Receiver<DhtCommand>, PeerMap) {
-    let own_node_id = ID(rand::random());
+    let own_node_id = ID::new(rand::random());
 
     let routing_table = RoutingTable::new(own_node_id.to_owned());
 
