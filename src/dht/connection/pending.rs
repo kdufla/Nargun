@@ -1,6 +1,5 @@
-use crate::constants::ID_LEN;
+use crate::data_structures::id::{ID, ID_LEN};
 use crate::dht::krpc_message::{Arguments, Message, Response};
-use crate::util::id::ID;
 use bytes::Bytes;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -60,7 +59,10 @@ impl From<&Response> for RequestType {
 #[cfg(test)]
 mod tests {
     use super::RequestType;
-    use crate::{constants::ID_LEN, dht::krpc_message::Message, util::id::ID};
+    use crate::{
+        data_structures::id::{ID, ID_LEN},
+        dht::krpc_message::Message,
+    };
     use bytes::Bytes;
 
     #[test]

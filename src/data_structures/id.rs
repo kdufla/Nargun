@@ -1,4 +1,3 @@
-use crate::constants::ID_LEN;
 use bytes::Bytes;
 use openssl::sha;
 use rand::{thread_rng, Rng};
@@ -9,41 +8,10 @@ use std::{
     ops::{BitXor, Sub},
 };
 
+pub const ID_LEN: usize = 20;
+
 #[derive(Clone, Hash)]
 pub struct ID([u8; ID_LEN]);
-
-impl<'de> Deserialize<'de> for ID {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct Visitor;
-
-        impl<'de> serde::de::Visitor<'de> for Visitor {
-            type Value = [u8; ID_LEN];
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("byte string")
-            }
-            fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                Ok(v.try_into().unwrap())
-            }
-        }
-        Ok(ID(deserializer.deserialize_byte_buf(Visitor {})?))
-    }
-}
-
-impl Serialize for ID {
-    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        s.serialize_bytes(&self.0)
-    }
-}
 
 impl ID {
     pub fn new(id_array: [u8; ID_LEN]) -> Self {
@@ -66,6 +34,20 @@ impl ID {
         let bit_filter = 0b1000_0000u8 >> bit_offset;
 
         self.0[byte_idx] ^= bit_filter;
+    }
+
+    pub fn change_bit(&mut self, i: usize, v: bool) {
+        let byte_idx = i / 8;
+        let bit_offset = i % 8;
+
+        let bit_clearer = !(0b1000_0000u8 >> bit_offset);
+        let byte_without_target_bit = bit_clearer & self.0[byte_idx];
+
+        // false is 0 and true is 1 (0b0000_0001), but I'm indexing left -> right
+        // shift left 7 and shift right bit_offset (up to 7), ie 7 - bit_offset
+        let bit_setter = (v as u8) << (7 - bit_offset);
+
+        self.0[byte_idx] = byte_without_target_bit | bit_setter;
     }
 
     pub fn cmp_first_n_bits(&self, other: &Self, n: usize) -> Ordering {
@@ -146,6 +128,39 @@ fn hamming_weight(mut x: u32) -> u32 {
     (x.wrapping_mul(0x01010101)) >> 24
 }
 
+impl Serialize for ID {
+    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        s.serialize_bytes(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for ID {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct Visitor;
+
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = [u8; ID_LEN];
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("byte string")
+            }
+            fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(v.try_into().unwrap())
+            }
+        }
+        Ok(ID(deserializer.deserialize_byte_buf(Visitor {})?))
+    }
+}
+
 impl fmt::Debug for ID {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut rv = String::with_capacity(64);
@@ -217,21 +232,109 @@ impl<'a, 'b> Sub<&'b ID> for &'a ID {
     }
 }
 
+impl From<Vec<u8>> for ID {
+    fn from(vec: Vec<u8>) -> Self {
+        if vec.len() != ID_LEN {
+            panic!("Vec<u8>::len() must be {}", ID_LEN);
+        }
+
+        ID(vec.try_into().unwrap())
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use tracing_test::traced_test;
+
     use super::{ID, ID_LEN};
     use std::cmp::Ordering;
 
     #[test]
     fn create() {
         let arr: [u8; ID_LEN] = rand::random();
-        let arr_clone = arr.clone();
 
-        let id = ID::new(arr_clone);
+        let id = ID::new(arr.to_owned());
 
         for (i, x) in arr.iter().enumerate() {
             assert_eq!(*x, id.0[i]);
         }
+    }
+
+    #[test]
+    fn get_bit() {
+        let mut id = ID::new(rand::random());
+
+        id.0[13] = 0b0001_0000;
+        assert!(!id.get_bit(13 * 8 + 1));
+        assert!(id.get_bit(13 * 8 + 3));
+
+        id.0[13] = 0b0100_1001;
+        assert!(id.get_bit(13 * 8 + 1));
+        assert!(!id.get_bit(13 * 8 + 3));
+    }
+
+    #[test]
+    fn flip_bit() {
+        let mut id = ID::new(rand::random());
+
+        id.0[13] = 0b0000_1111;
+        id.flip_bit(13 * 8 + 3);
+
+        assert_eq!(0b0001_1111, id.0[13])
+    }
+
+    #[test]
+    #[traced_test]
+    fn change_bit() {
+        let mut id = ID::new(rand::random());
+        id.0[17] = 0b0101_1010;
+
+        id.change_bit(17 * 8 + 1, false);
+        id.change_bit(17 * 8 + 7, true);
+
+        assert_eq!(0b0001_1011, id.0[17]);
+    }
+
+    #[test]
+    fn cmp() {
+        let mut id0 = ID::new(rand::random());
+        let mut id1 = ID::new(rand::random());
+
+        id0.0[0] = 0b1010_1010;
+        id1.0[0] = 0b1010_1010;
+
+        id0.0[1] = 0b1010_0101;
+        id1.0[1] = 0b1010_1010;
+
+        assert_eq!(Ordering::Equal, id0.cmp_first_n_bits(&id1, 7));
+        assert_eq!(Ordering::Equal, id1.cmp_first_n_bits(&id0, 7));
+        assert_eq!(Ordering::Equal, id0.cmp_first_n_bits(&id1, 10));
+
+        assert_eq!(Ordering::Greater, id1.cmp_first_n_bits(&id0, 15));
+        assert_eq!(Ordering::Less, id0.cmp_first_n_bits(&id1, 14));
+    }
+
+    #[test]
+    fn randomize() {
+        let mut id = ID::new([0; 20]);
+
+        for _ in 0..64 {
+            id.randomize_after_bit(8 + 2);
+            assert!(id.as_byte_ref()[1] <= 0b0001_1111);
+        }
+
+        assert!(id.weight() > 0);
+    }
+
+    #[test]
+    fn weight() {
+        assert_eq!(
+            51,
+            ID::new([
+                1, 1, 1, 1, 1, 0xFF, 0xFF, 0, 0x11, 0xFF, 0xFF, 0xFF, 1, 0, 0, 0, 0, 0, 1, 5,
+            ])
+            .weight()
+        );
     }
 
     #[test]
@@ -358,28 +461,5 @@ mod tests {
 
         assert_eq!(&left ^ &right, &left - &right);
         assert_eq!(&left ^ &right, &right - &left);
-    }
-
-    #[test]
-    fn weight() {
-        assert_eq!(
-            51,
-            ID::new([
-                1, 1, 1, 1, 1, 0xFF, 0xFF, 0, 0x11, 0xFF, 0xFF, 0xFF, 1, 0, 0, 0, 0, 0, 1, 5,
-            ])
-            .weight()
-        );
-    }
-
-    #[test]
-    fn randomize() {
-        let mut id = ID::new([0; 20]);
-
-        for _ in 0..64 {
-            id.randomize_after_bit(8 + 2);
-            assert!(id.as_byte_ref()[1] <= 0b0001_1111);
-        }
-
-        assert!(id.weight() > 0);
     }
 }

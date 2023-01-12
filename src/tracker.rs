@@ -1,18 +1,18 @@
 pub mod announce;
 pub mod response;
-
 use self::announce::{Announce, AnnounceEvent};
 use self::response::Response;
-use crate::constants::ANNOUNCE_RETRY;
+use crate::data_structures::id::ID;
 use crate::metainfo::Torrent;
 use crate::peer::Peers;
-use crate::util::id::ID;
 use anyhow::{anyhow, Result};
 use bendy::decoding::{Decoder, FromBencode};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::broadcast::{self, Receiver};
 use tokio::time::{interval, Duration, MissedTickBehavior};
+
+pub const ANNOUNCE_RETRY: u8 = 3;
 
 async fn fetch_response(url: &String) -> Result<Response> {
     match reqwest::get(url).await {

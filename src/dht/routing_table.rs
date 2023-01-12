@@ -1,7 +1,6 @@
 use super::krpc_message::Nodes;
-use crate::constants::{COMPACT_NODE_LEN, ID_LEN};
-use crate::util::functions::socketaddr_from_compact_bytes;
-use crate::util::id::ID;
+use crate::data_structures::id::{ID, ID_LEN};
+use crate::peer::{socketaddr_from_compact_bytes, COMPACT_SOCKADDR_LEN};
 use anyhow::{anyhow, bail, Result};
 use rand::{thread_rng, Rng};
 use std::cmp::Ordering;
@@ -11,6 +10,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 use tracing::debug;
 
+pub const COMPACT_NODE_LEN: usize = ID_LEN + COMPACT_SOCKADDR_LEN;
 const K_NODE_PER_BUCKET: usize = 8;
 
 #[derive(Debug)]
@@ -478,9 +478,9 @@ mod routing_table_tests {
     use tracing_test::traced_test;
 
     use crate::{
-        constants::COMPACT_SOCKADDR_LEN,
+        data_structures::id::ID,
         dht::krpc_message::Nodes,
-        util::{functions::socketaddr_from_compact_bytes, id::ID},
+        peer::{socketaddr_from_compact_bytes, COMPACT_SOCKADDR_LEN},
     };
 
     use super::{RoutingTable, TreeNode, K_NODE_PER_BUCKET};

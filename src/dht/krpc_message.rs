@@ -1,6 +1,7 @@
 use super::routing_table::Node;
 use crate::{
-    constants::COMPACT_NODE_LEN, peer::Peer, peer_message::SerializableBytes, util::id::ID,
+    data_structures::id::ID, dht::routing_table::COMPACT_NODE_LEN, peer::Peer,
+    peer_message::SerializableBytes,
 };
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
@@ -386,7 +387,7 @@ impl<'de> Deserialize<'de> for Nodes {
 
 #[cfg(test)]
 mod krpc_tests {
-    use crate::{dht::routing_table::Node, util::id::ID};
+    use crate::{data_structures::id::ID, dht::routing_table::Node};
 
     macro_rules! encoded_with_custom_tid {
         ($start:expr, $tid:expr) => {{
@@ -432,12 +433,12 @@ mod krpc_tests {
 
         use super::super::Message;
         use crate::{
+            data_structures::id::ID,
             dht::{
                 krpc_message::{Error, Nodes, ValuesOrNodes},
                 routing_table::Node,
             },
             peer::Peer,
-            util::id::ID,
         };
         use std::net::{Ipv4Addr, SocketAddrV4};
 
@@ -687,9 +688,9 @@ mod krpc_tests {
 
         use super::super::Message;
         use crate::{
+            data_structures::id::ID,
             dht::krpc_message::{Arguments, Error, Nodes, Response, ValuesOrNodes},
             peer::Peer,
-            util::id::ID,
         };
         use std::net::{Ipv4Addr, SocketAddrV4};
 

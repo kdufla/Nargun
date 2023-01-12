@@ -1,13 +1,13 @@
 pub mod config;
-pub mod constants;
+pub mod data_structures;
 pub mod dht;
 pub mod gateway_device;
+pub mod macros;
 pub mod metainfo;
 pub mod peer;
 pub mod peer_connection;
 pub mod peer_message;
 pub mod tracker;
-pub mod util;
 
 use anyhow::Result;
 use tracing::{debug, error, info, warn};
@@ -17,8 +17,8 @@ use dht::dht;
 use peer::Peers;
 use std::net::SocketAddrV4;
 // use tokio::sync::broadcast;
+use data_structures::id::ID;
 use tokio::{sync::mpsc, time::sleep};
-use util::id::ID;
 
 #[tokio::main]
 async fn main() -> Result<()> {

@@ -2,15 +2,13 @@ pub mod command;
 pub mod handshake;
 pub mod info;
 pub mod pending_pieces;
-
 use self::command::{Command, CommandType};
 use self::handshake::initiate_handshake;
 use self::info::PeerConnectionInfo;
 use self::pending_pieces::PendingPieces;
-use crate::constants::{BLOCK_SIZE, KEEP_ALIVE_INTERVAL_SECS, MAX_CONCURRENT_REQUESTS};
+use crate::data_structures::{bitmap::Bitmap, id::ID};
 use crate::peer_message::{Message, Request};
 use crate::unsigned_ceil_div;
-use crate::util::{bitmap::Bitmap, id::ID};
 use anyhow::Result;
 use std::net::SocketAddr;
 use tokio::io::{split, AsyncWriteExt, ReadHalf, WriteHalf};
@@ -18,6 +16,10 @@ use tokio::net::TcpStream;
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio::time::{interval, Duration};
+
+pub const BLOCK_SIZE: u32 = 16384;
+pub const KEEP_ALIVE_INTERVAL_SECS: u64 = 100;
+pub const MAX_CONCURRENT_REQUESTS: u32 = 3;
 
 #[derive(Clone)]
 pub struct PeerConnection {
@@ -170,7 +172,7 @@ impl PeerConnection {
                 }
                 Message::Interested => self.connection_info.set_peer_interested(true),
                 Message::NotInterested => self.connection_info.set_peer_interested(false),
-                Message::Have(piece_index) => self.pieces.set(piece_index as usize, true),
+                Message::Have(piece_index) => self.pieces.change(piece_index as usize, true),
                 Message::Bitfield(bitfield) => {
                     // TODO handle error
                     self.pieces.replace_data(&bitfield.into_bytes())?;

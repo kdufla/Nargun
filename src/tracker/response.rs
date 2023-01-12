@@ -1,11 +1,9 @@
+use crate::ok_or_missing_field;
+use crate::peer::{socketaddr_from_compact_bytes, Peer, COMPACT_SOCKADDR_LEN};
 use anyhow::Result;
 use bendy::decoding::{FromBencode, Object};
 use bendy::encoding::AsString;
 use tracing::warn;
-
-use crate::constants::COMPACT_SOCKADDR_LEN;
-use crate::peer::Peer;
-use crate::util::functions::socketaddr_from_compact_bytes;
 
 #[derive(Debug, Clone)]
 pub struct Response {
@@ -77,13 +75,12 @@ impl FromBencode for Response {
 
         Ok(Response {
             warning_message,
-            interval: interval.ok_or_else(|| bendy::decoding::Error::missing_field("interval"))?,
+            interval: ok_or_missing_field!(interval)?,
             min_interval,
             tracker_id,
-            complete: complete.ok_or_else(|| bendy::decoding::Error::missing_field("complete"))?,
-            incomplete: incomplete
-                .ok_or_else(|| bendy::decoding::Error::missing_field("incomplete"))?,
-            peers: peers.ok_or_else(|| bendy::decoding::Error::missing_field("peers"))?,
+            complete: ok_or_missing_field!(complete)?,
+            incomplete: ok_or_missing_field!(incomplete)?,
+            peers: ok_or_missing_field!(peers)?,
         })
     }
 }

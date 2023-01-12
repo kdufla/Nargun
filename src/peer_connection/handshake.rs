@@ -1,4 +1,4 @@
-use crate::util::id::ID;
+use crate::data_structures::id::ID;
 use anyhow::{anyhow, bail, Result};
 use std::mem::size_of;
 use std::net::SocketAddr;
@@ -80,7 +80,7 @@ impl Handshake {
 #[cfg(test)]
 mod tests {
     use super::{Handshake, HANDSHAKE_LENGTH_FOR_BITTORRENT_PROTOCOL, PSTR, PSTRLEN};
-    use crate::{constants::ID_LEN, util::id::ID};
+    use crate::data_structures::id::{ID, ID_LEN};
 
     const INFO_HASH: [u8; ID_LEN] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
     const PEER_ID: [u8; ID_LEN] = [9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0];

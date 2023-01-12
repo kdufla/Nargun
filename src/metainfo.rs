@@ -1,3 +1,4 @@
+use crate::{ok_or_missing_field, unsigned_ceil_div};
 use anyhow::Result;
 use bendy::decoding::{Decoder, FromBencode, Object};
 use bendy::encoding::AsString;
@@ -6,8 +7,6 @@ use std::collections::HashSet;
 use std::fmt;
 use std::fs::File as fsFile;
 use std::io::Read;
-
-use crate::unsigned_ceil_div;
 
 #[derive(Debug)]
 pub struct File {
@@ -70,8 +69,8 @@ impl FromBencode for File {
         }
 
         Ok(File {
-            path: path.ok_or_else(|| bendy::decoding::Error::missing_field("path"))?,
-            length: length.ok_or_else(|| bendy::decoding::Error::missing_field("length"))?,
+            path: ok_or_missing_field!(path)?,
+            length: ok_or_missing_field!(length)?,
         })
     }
 }
@@ -134,10 +133,9 @@ impl FromBencode for Info {
         }
 
         Ok(Info {
-            piece_length: piece_length
-                .ok_or_else(|| bendy::decoding::Error::missing_field("piece length"))?,
-            pieces: pieces.ok_or_else(|| bendy::decoding::Error::missing_field("pieces"))?,
-            name: name.ok_or_else(|| bendy::decoding::Error::missing_field("name"))?,
+            piece_length: ok_or_missing_field!(piece_length)?,
+            pieces: ok_or_missing_field!(pieces)?,
+            name: ok_or_missing_field!(name)?,
             length,
             files,
         })
@@ -191,12 +189,9 @@ impl FromBencode for Torrent {
         }
 
         Ok(Torrent {
-            announce: match announce.is_empty() {
-                true => Err(bendy::decoding::Error::missing_field("announce")),
-                false => Ok(announce),
-            }?,
-            info: info.ok_or_else(|| bendy::decoding::Error::missing_field("info"))?,
-            info_hash: info_hash.ok_or_else(|| bendy::decoding::Error::missing_field("info"))?,
+            announce: ok_or_missing_field!((!announce.is_empty()).then(|| announce), "announce")?,
+            info: ok_or_missing_field!(info)?,
+            info_hash: ok_or_missing_field!(info_hash, "info")?,
         })
     }
 }

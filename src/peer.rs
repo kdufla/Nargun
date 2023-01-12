@@ -2,12 +2,12 @@ use anyhow::{bail, Result};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::hash_map::Entry::Vacant;
 use std::collections::HashMap;
-use std::net::SocketAddrV4;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Instant;
 
-use crate::constants::COMPACT_SOCKADDR_LEN;
-use crate::util::functions::socketaddr_from_compact_bytes;
+pub const COMPACT_SOCKADDR_LEN: usize = 6;
+pub const COMPACT_PEER_LEN: usize = COMPACT_SOCKADDR_LEN;
 
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub struct Peer(SocketAddrV4);
@@ -149,6 +149,20 @@ impl Peers {
 
     pub fn peer_addresses(&self) -> Vec<Peer> {
         self.data.lock().unwrap().keys().cloned().collect()
+    }
+}
+
+pub fn socketaddr_from_compact_bytes(buf: &[u8]) -> Result<SocketAddrV4> {
+    match buf.len() {
+        COMPACT_SOCKADDR_LEN => Ok(SocketAddrV4::new(
+            Ipv4Addr::new(buf[0], buf[1], buf[2], buf[3]),
+            ((buf[4] as u16) << 8) | buf[5] as u16,
+        )),
+        _ => bail!(
+            "socketaddr_from_compact_bytes: buffer len expected {} found {}",
+            COMPACT_SOCKADDR_LEN,
+            buf.len()
+        ),
     }
 }
 

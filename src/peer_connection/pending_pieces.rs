@@ -1,13 +1,12 @@
+use super::BLOCK_SIZE;
+use crate::peer_message::Piece;
+use crate::unsigned_ceil_div;
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use rand::Rng;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::oneshot;
-
-use crate::constants::BLOCK_SIZE;
-use crate::peer_message::Piece;
-use crate::unsigned_ceil_div;
 
 // TODO this is shit
 #[derive(Clone)]

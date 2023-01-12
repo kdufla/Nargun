@@ -1,17 +1,15 @@
 pub mod connection;
 pub mod krpc_message;
 pub mod routing_table;
-
 use self::{
     connection::{CommandType, Connection, QueryCommand, RespCommand, MTU},
     krpc_message::{Nodes, ValuesOrNodes},
     routing_table::RoutingTable,
 };
 use crate::{
-    constants::COMPACT_PEER_LEN,
+    data_structures::id::ID,
     dht::connection::ConCommand,
-    peer::{Peer, Peers},
-    util::id::ID,
+    peer::{Peer, Peers, COMPACT_PEER_LEN},
 };
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
