@@ -609,7 +609,7 @@ mod routing_table_tests {
             id.flip_bit(i + 3);
         }
 
-        rt.insert_good(id.to_owned(), addr.to_owned());
+        rt.insert_good(og_id.to_owned(), addr.to_owned());
 
         let Some(nodes) = rt.find_node(&og_id) else {
             panic!("expected Some(Nodes), fount None");
