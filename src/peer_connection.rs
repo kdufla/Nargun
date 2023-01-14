@@ -95,6 +95,7 @@ impl PeerConnection {
         mut command_receiver: mpsc::Receiver<Command>,
     ) -> Result<()> {
         let mut interval = interval(Duration::from_secs(KEEP_ALIVE_INTERVAL_SECS));
+        interval.tick().await;
 
         loop {
             tokio::select! {
