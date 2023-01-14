@@ -6,6 +6,8 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Instant;
 
+use crate::data_structures::id::ID;
+
 pub const COMPACT_SOCKADDR_LEN: usize = 6;
 pub const COMPACT_PEER_LEN: usize = COMPACT_SOCKADDR_LEN;
 
@@ -95,14 +97,20 @@ struct PeerEntry {
 
 #[derive(Clone, Debug)]
 pub struct Peers {
+    info_hash: ID,
     data: Arc<StdMutex<HashMap<Peer, PeerEntry>>>,
 }
 
 impl Peers {
-    pub fn new() -> Self {
+    pub fn new(info_hash: &ID) -> Self {
         Self {
+            info_hash: info_hash.to_owned(),
             data: Arc::new(StdMutex::new(HashMap::new())),
         }
+    }
+
+    pub fn serve(&self, info_hash: &ID) -> bool {
+        *info_hash == self.info_hash
     }
 
     pub fn get_random(&self) -> Option<Peer> {

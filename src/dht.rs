@@ -43,13 +43,13 @@ pub enum DhtCommand {
     FetchPeers(ID),
 }
 
-pub async fn dht(peers: Peers, info_hash: ID, mut new_peer_with_dht: mpsc::Receiver<SocketAddrV4>) {
+pub async fn dht(peers: Peers, info_hash: ID, mut peer_with_dht: mpsc::Receiver<SocketAddrV4>) {
     let (mut routing_table, udp_connection, mut dht_command_rx, mut peer_map) =
         setup(&peers, info_hash);
 
     loop {
         match select! {
-            addr = new_peer_with_dht.recv() => try_ping_node(&udp_connection, addr).await,
+            addr = peer_with_dht.recv() => try_ping_node(&udp_connection, addr).await,
             command = dht_command_rx.recv() => process_incoming_command(command, &mut routing_table, &udp_connection, &peers, &mut peer_map).await,
         } {
             Ok(_) => debug!(
@@ -107,13 +107,9 @@ async fn process_incoming_command(
     match command {
         DhtCommand::Touch(id, addr) => routing_table.touch_node(id, addr),
         DhtCommand::NewNodes(nodes) => ping_unknown_nodes(nodes, connection, routing_table),
-        DhtCommand::NewPeers(new_peers, info_hash) => store_new_peers(
-            new_peers,
-            info_hash,
-            routing_table,
-            torrent_peers,
-            dht_peer_map,
-        ),
+        DhtCommand::NewPeers(new_peers, info_hash) => {
+            store_new_peers(new_peers, info_hash, torrent_peers, dht_peer_map)
+        }
         DhtCommand::FindNode(target, tid, from) => {
             find_node(connection, routing_table, &target, from, tid)?
         }
@@ -153,24 +149,27 @@ fn ping_unknown_nodes(nodes: Nodes, connection: &Connection, routing_table: &Rou
 fn store_new_peers(
     new_peers: Vec<Peer>,
     info_hash: ID,
-    routing_table: &RoutingTable,
     torrent_peers: &Peers,
     dht_peer_map: &mut PeerMap,
 ) {
-    if info_hash == *routing_table.own_id() {
-        torrent_peers.insert_list(&new_peers);
-    }
-
-    match dht_peer_map.entry(info_hash) {
+    let was_inserted = match dht_peer_map.entry(info_hash.to_owned()) {
         hash_map::Entry::Occupied(mut entry) => {
             let stored_peers = entry.get_mut();
+            let mut was_inserted = false;
             for peer in new_peers.iter() {
-                stored_peers.insert(peer.to_owned());
+                was_inserted |= stored_peers.insert(peer.to_owned());
             }
+            was_inserted
         }
         hash_map::Entry::Vacant(entry) => {
-            entry.insert(new_peers.into_iter().collect());
+            entry.insert(new_peers.iter().cloned().collect());
+            true
         }
+    };
+
+    // I'm making sure I need to insert because this is a locking insert
+    if was_inserted && torrent_peers.serve(&info_hash) {
+        torrent_peers.insert_list(&new_peers);
     }
 }
 

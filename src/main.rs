@@ -61,11 +61,11 @@ async fn main() -> Result<()> {
     // pieces_downloaded: Arc<AtomicU64>,
     // tx: &broadcast::Sender<bool>,
 
-    let peers = Peers::new();
+    let peers = Peers::new(&torrent.info_hash);
     let (tx, rx) = mpsc::channel(12);
 
     tokio::spawn(async move {
-        dht(peers, ID::new(torrent.info_hash.clone()), rx).await;
+        dht(peers, torrent.info_hash.clone(), rx).await;
     });
 
     let _ = tx.send(addr).await;

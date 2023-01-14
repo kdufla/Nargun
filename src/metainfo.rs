@@ -1,3 +1,4 @@
+use crate::data_structures::id::ID;
 use crate::{ok_or_missing_field, unsigned_ceil_div};
 use anyhow::Result;
 use bendy::decoding::{Decoder, FromBencode, Object};
@@ -26,7 +27,7 @@ pub struct Info {
 #[derive(Debug)]
 pub struct Torrent {
     pub info: Info,
-    pub info_hash: [u8; 20],
+    pub info_hash: ID,
     pub announce: HashSet<TrackerAddr>,
 }
 
@@ -158,7 +159,7 @@ impl FromBencode for Torrent {
 
                     let mut hasher = sha::Sha1::new();
                     hasher.update(bytes);
-                    info_hash = Some(hasher.finish());
+                    info_hash = Some(ID::new(hasher.finish()));
 
                     let mut decoder = Decoder::new(bytes);
                     let obj = decoder.next_object()?;
@@ -263,7 +264,10 @@ impl Torrent {
 
 #[cfg(test)]
 mod tests {
-    use crate::metainfo::{from_file, TrackerAddr};
+    use crate::{
+        data_structures::id::ID,
+        metainfo::{from_file, TrackerAddr},
+    };
 
     const METAINFO_MULTI: &str = "resources/38WarBreaker.torrent";
     const METAINFO_SINGLE: &str = "resources/ubuntu-22.04.1-desktop-amd64.iso.torrent";
@@ -278,10 +282,10 @@ mod tests {
         )));
         assert_eq!(
             torrent.info_hash,
-            [
+            ID::new([
                 0x55, 0x52, 0x08, 0x7e, 0xc1, 0x98, 0x40, 0xac, 0xe8, 0x79, 0x5a, 0xf9, 0x3e, 0x13,
                 0x7d, 0x2b, 0xd7, 0x14, 0x50, 0xd7
-            ]
+            ])
         );
         assert!(torrent.info.length.is_none());
         assert!(torrent.info.files.is_some());
@@ -312,10 +316,10 @@ mod tests {
         )));
         assert_eq!(
             torrent.info_hash,
-            [
+            ID::new([
                 0x3b, 0x24, 0x55, 0x04, 0xcf, 0x5f, 0x11, 0xbb, 0xdb, 0xe1, 0x20, 0x1c, 0xea, 0x6a,
                 0x6b, 0xf4, 0x5a, 0xee, 0x1b, 0xc0
-            ]
+            ])
         );
         assert!(torrent.info.length.is_some());
         assert!(torrent.info.files.is_none());

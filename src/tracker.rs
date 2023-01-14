@@ -137,7 +137,7 @@ pub async fn spawns_tracker_managers(
     for tracker in torrent.http_trackers() {
         println!("start: {}", tracker);
         let tracker_url = tracker.clone();
-        let info_hash = ID::new(torrent.info_hash.clone());
+        let info_hash = torrent.info_hash.clone();
         let peer_id = peer_id.clone();
         let piece_count = torrent.count_pieces();
         let piece_length = torrent.info.piece_length;
