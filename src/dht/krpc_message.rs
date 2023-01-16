@@ -1,7 +1,8 @@
 use super::routing_table::Node;
 use crate::{
-    data_structures::id::ID, dht::routing_table::COMPACT_NODE_LEN, peer::Peer,
-    peer_message::SerializableBytes,
+    data_structures::{id::ID, no_size_bytes::NoSizeBytes},
+    dht::routing_table::COMPACT_NODE_LEN,
+    peer::Peer,
 };
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
@@ -14,7 +15,7 @@ use std::str;
 pub enum Message {
     Query {
         #[serde(rename = "t")]
-        transaction_id: SerializableBytes,
+        transaction_id: NoSizeBytes,
         #[serde(rename = "y")]
         msg_type: MessageType,
         #[serde(rename = "q")]
@@ -24,7 +25,7 @@ pub enum Message {
     },
     Response {
         #[serde(rename = "t")]
-        transaction_id: SerializableBytes,
+        transaction_id: NoSizeBytes,
         #[serde(rename = "y")]
         msg_type: MessageType,
         #[serde(rename = "r")]
@@ -32,7 +33,7 @@ pub enum Message {
     },
     Error {
         #[serde(rename = "t")]
-        transaction_id: SerializableBytes,
+        transaction_id: NoSizeBytes,
         #[serde(rename = "y")]
         msg_type: MessageType,
         #[serde(rename = "e")]
@@ -47,7 +48,7 @@ pub enum Arguments {
         id: ID,
         info_hash: ID,
         port: u16,
-        token: SerializableBytes,
+        token: NoSizeBytes,
     },
     FindNode {
         id: ID,
@@ -67,7 +68,7 @@ pub enum Arguments {
 pub enum Response {
     GetPeers {
         id: ID,
-        token: SerializableBytes,
+        token: NoSizeBytes,
         #[serde(flatten)]
         values_or_nodes: ValuesOrNodes,
     },
@@ -125,7 +126,7 @@ impl Message {
 
     pub fn ping_query(id: &ID) -> Self {
         Self::Query {
-            transaction_id: SerializableBytes::new(Bytes::from(Vec::from(rand::random::<TID>()))),
+            transaction_id: NoSizeBytes::new(Bytes::from(Vec::from(rand::random::<TID>()))),
             msg_type: MessageType(b'q'),
             method_name: "ping".to_string(),
             arguments: Arguments::Ping { id: id.to_owned() },
@@ -134,7 +135,7 @@ impl Message {
 
     pub fn ping_resp(id: &ID, transaction_id: Bytes) -> Self {
         Self::Response {
-            transaction_id: SerializableBytes::new(transaction_id),
+            transaction_id: NoSizeBytes::new(transaction_id),
             msg_type: MessageType(b'r'),
             response: Response::Ping { id: id.to_owned() },
         }
@@ -142,7 +143,7 @@ impl Message {
 
     pub fn find_nodes_query(id: &ID, target: &ID) -> Self {
         Self::Query {
-            transaction_id: SerializableBytes::new(Bytes::from(Vec::from(rand::random::<TID>()))),
+            transaction_id: NoSizeBytes::new(Bytes::from(Vec::from(rand::random::<TID>()))),
             msg_type: MessageType(b'q'),
             method_name: "find_node".to_string(),
             arguments: Arguments::FindNode {
@@ -154,7 +155,7 @@ impl Message {
 
     pub fn find_nodes_resp(id: &ID, nodes: Nodes, transaction_id: Bytes) -> Self {
         Self::Response {
-            transaction_id: SerializableBytes::new(transaction_id),
+            transaction_id: NoSizeBytes::new(transaction_id),
             msg_type: MessageType(b'r'),
             response: Response::FindNode {
                 id: id.clone(),
@@ -165,7 +166,7 @@ impl Message {
 
     pub fn get_peers_query(id: &ID, info_hash: &ID) -> Self {
         Self::Query {
-            transaction_id: SerializableBytes::new(Bytes::from(Vec::from(rand::random::<TID>()))),
+            transaction_id: NoSizeBytes::new(Bytes::from(Vec::from(rand::random::<TID>()))),
             msg_type: MessageType(b'q'),
             method_name: "get_peers".to_string(),
             arguments: Arguments::GetPeers {
@@ -182,11 +183,11 @@ impl Message {
         transaction_id: Bytes,
     ) -> Self {
         Self::Response {
-            transaction_id: SerializableBytes::new(transaction_id),
+            transaction_id: NoSizeBytes::new(transaction_id),
             msg_type: MessageType(b'r'),
             response: Response::GetPeers {
                 id: id.to_owned(),
-                token: SerializableBytes::new(token),
+                token: NoSizeBytes::new(token),
                 values_or_nodes,
             },
         }
@@ -194,21 +195,21 @@ impl Message {
 
     pub fn announce_peer_query(id: &ID, info_hash: &ID, port: u16, token: Bytes) -> Self {
         Self::Query {
-            transaction_id: SerializableBytes::new(Bytes::from(Vec::from(rand::random::<TID>()))),
+            transaction_id: NoSizeBytes::new(Bytes::from(Vec::from(rand::random::<TID>()))),
             msg_type: MessageType(b'q'),
             method_name: "announce_peer".to_string(),
             arguments: Arguments::AnnouncePeer {
                 id: id.to_owned(),
                 info_hash: info_hash.to_owned(),
                 port,
-                token: SerializableBytes::new(token),
+                token: NoSizeBytes::new(token),
             },
         }
     }
 
     pub fn announce_peer_resp(id: &ID, transaction_id: Bytes) -> Self {
         Self::Response {
-            transaction_id: SerializableBytes::new(transaction_id),
+            transaction_id: NoSizeBytes::new(transaction_id),
             msg_type: MessageType(b'r'),
             response: Response::AnnouncePeer { id: id.to_owned() },
         }
@@ -216,7 +217,7 @@ impl Message {
 
     pub fn error_resp(error: Vec<Error>, transaction_id: Bytes) -> Self {
         Self::Error {
-            transaction_id: SerializableBytes::new(transaction_id),
+            transaction_id: NoSizeBytes::new(transaction_id),
             msg_type: MessageType(b'e'),
             error,
         }
