@@ -1,5 +1,6 @@
 pub mod announce;
 pub mod response;
+
 use self::announce::{Announce, AnnounceEvent};
 use self::response::Response;
 use crate::data_structures::id::ID;
@@ -125,7 +126,7 @@ async fn manage_http_tracker(
     }
 }
 
-pub async fn spawns_tracker_managers(
+pub async fn spawn_tracker_managers(
     torrent: &Torrent,
     peer_id: &ID,
     peers: &Peers,
