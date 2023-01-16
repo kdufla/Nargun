@@ -43,6 +43,7 @@ pub enum DhtCommand {
     FetchPeers(ID),
 }
 
+// TODO store routing table
 pub async fn dht(peers: Peers, info_hash: ID, mut peer_with_dht: mpsc::Receiver<SocketAddrV4>) {
     let (mut routing_table, udp_connection, mut dht_command_rx, mut peer_map) =
         setup(&peers, info_hash);
