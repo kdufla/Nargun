@@ -1,4 +1,6 @@
 use crate::data_structures::no_size_bytes::NoSizeBytes;
+use crate::peer_connection::pending_pieces::BlockAddress;
+use crate::peer_connection::BLOCK_SIZE;
 use anyhow::{bail, Result};
 use bincode::Options;
 use bytes::Bytes;
@@ -51,14 +53,14 @@ pub enum Message {
     Port(u16),
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, Clone)]
 pub struct Request {
     pub index: u32,
     pub begin: u32,
     pub length: u32,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, Clone)]
 pub struct Piece {
     pub index: u32,
     pub begin: u32,
@@ -129,13 +131,14 @@ impl Message {
         Ok(message)
     }
 
-    pub fn into_bytes(self) -> Result<Bytes> {
-        Ok(Bytes::from(
+    pub fn into_bytes(self) -> Bytes {
+        Bytes::from(
             bincode::DefaultOptions::new()
                 .with_big_endian()
                 .with_fixint_encoding()
-                .serialize(&self)?,
-        ))
+                .serialize(&self)
+                .unwrap(),
+        )
     }
 }
 
@@ -236,6 +239,16 @@ impl Piece {
     }
 }
 
+impl From<BlockAddress> for Request {
+    fn from(value: BlockAddress) -> Self {
+        Self {
+            index: value.piece_idx as u32,
+            begin: value.block_idx as u32 * BLOCK_SIZE,
+            length: BLOCK_SIZE,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Message, Piece, Request};
@@ -256,7 +269,7 @@ mod tests {
 
         assert_eq!(expected_message, message);
 
-        let bytes = message.into_bytes().unwrap();
+        let bytes = message.into_bytes();
 
         assert_eq!(&buf[..raw_message.len()], bytes.as_ref());
     }

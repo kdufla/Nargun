@@ -2,7 +2,7 @@ use anyhow::Result;
 use bytes::Bytes;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct NoSizeBytes(Bytes);
 
 impl NoSizeBytes {
