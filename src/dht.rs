@@ -44,14 +44,14 @@ pub enum DhtCommand {
 }
 
 // TODO store routing table
-pub async fn dht(peers: Peers, info_hash: ID, mut peer_with_dht: mpsc::Receiver<SocketAddrV4>) {
+pub async fn dht(mut peers: Peers, info_hash: ID, mut peer_with_dht: mpsc::Receiver<SocketAddrV4>) {
     let (mut routing_table, udp_connection, mut dht_command_rx, mut peer_map) =
         setup(&peers, info_hash);
 
     loop {
         match select! {
             addr = peer_with_dht.recv() => try_ping_node(&udp_connection, addr).await,
-            command = dht_command_rx.recv() => process_incoming_command(command, &mut routing_table, &udp_connection, &peers, &mut peer_map).await,
+            command = dht_command_rx.recv() => process_incoming_command(command, &mut routing_table, &udp_connection, &mut peers, &mut peer_map).await,
         } {
             Ok(_) => debug!(
                 "command handled\nrouting_table = {:?}\npeer_map = {:?}",
@@ -96,7 +96,7 @@ async fn process_incoming_command(
     command: Option<DhtCommand>,
     routing_table: &mut RoutingTable,
     connection: &Connection,
-    torrent_peers: &Peers,
+    torrent_peers: &mut Peers,
     dht_peer_map: &mut PeerMap,
 ) -> Result<()> {
     let Some(command)  = command else{
@@ -150,7 +150,7 @@ fn ping_unknown_nodes(nodes: Nodes, connection: &Connection, routing_table: &Rou
 fn store_new_peers(
     new_peers: Vec<Peer>,
     info_hash: ID,
-    torrent_peers: &Peers,
+    torrent_peers: &mut Peers,
     dht_peer_map: &mut PeerMap,
 ) {
     let was_inserted = match dht_peer_map.entry(info_hash.to_owned()) {
@@ -168,9 +168,9 @@ fn store_new_peers(
         }
     };
 
-    // I'm making sure I need to insert because this is a locking insert
+    // making sure I need this because it's a locking insert
     if was_inserted && torrent_peers.serve(&info_hash) {
-        torrent_peers.insert_list(&new_peers);
+        torrent_peers.extend(&new_peers);
     }
 }
 

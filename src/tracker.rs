@@ -63,7 +63,7 @@ async fn manage_http_tracker(
     piece_count: u64,
     piece_length: u64,
     pieces_downloaded: Arc<AtomicU64>,
-    peers: Peers,
+    mut peers: Peers,
     mut announce_event_message: Receiver<bool>,
     tcp_port: u16,
 ) {
@@ -88,7 +88,7 @@ async fn manage_http_tracker(
         interval.tick().await;
 
         loop {
-            peers.insert_list(&response.peers);
+            peers.extend(&response.peers);
 
             if announce.tracker_id.is_none() && response.tracker_id.is_some() {
                 announce.tracker_id = response.tracker_id.clone();

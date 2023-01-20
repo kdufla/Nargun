@@ -1,12 +1,10 @@
+use crate::data_structures::id::ID;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::hash_map::Entry::Vacant;
 use std::collections::HashMap;
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::mem::discriminant;
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Instant;
-
-use crate::data_structures::id::ID;
 
 pub const COMPACT_SOCKADDR_LEN: usize = 6;
 pub const COMPACT_PEER_LEN: usize = COMPACT_SOCKADDR_LEN;
@@ -41,7 +39,7 @@ impl Serialize for Peer {
     where
         S: Serializer,
     {
-        let mut v = Vec::new();
+        let mut v = Vec::with_capacity(COMPACT_PEER_LEN);
 
         v.extend_from_slice(&self.0.ip().octets());
         v.push((self.0.port() >> 8) as u8);
@@ -81,24 +79,20 @@ impl<'de> Deserialize<'de> for Peer {
     }
 }
 
-#[derive(Debug)]
-pub enum InactivenessReason {
+#[derive(Debug, Clone, PartialEq)]
+pub enum Status {
+    // TODO these need Instants and weighted sort based on elapsed time
+    Active,
     Unknown,
     UnableToConnect,
     ChokedForTooLong,
-}
-
-#[derive(Debug)]
-struct PeerEntry {
-    active: bool,
-    inactiveness_reason: InactivenessReason,
-    last_connection_instant: Option<Instant>,
+    NoUsefulPieces,
 }
 
 #[derive(Clone, Debug)]
 pub struct Peers {
     info_hash: ID,
-    data: Arc<StdMutex<HashMap<Peer, PeerEntry>>>,
+    data: Arc<StdMutex<HashMap<Peer, Status>>>,
 }
 
 impl Peers {
@@ -109,54 +103,115 @@ impl Peers {
         }
     }
 
+    // TODO this name is bad. `peers.serve(info_hash)` is clear but only seeing it here is laughably bad.
     pub fn serve(&self, info_hash: &ID) -> bool {
         *info_hash == self.info_hash
     }
 
-    pub fn get_random(&self) -> Option<Peer> {
-        let mut data = self.data.lock().unwrap();
-
-        let no_or_min_time_entry = data.iter_mut().min_by(|x, y| {
-            x.1.last_connection_instant
-                .cmp(&y.1.last_connection_instant)
-        });
-
-        match no_or_min_time_entry {
-            Some((sock_addr, entry)) => {
-                entry.active = true;
-                Some(sock_addr.to_owned())
-            }
-            None => None,
-        }
-    }
-
-    // pub fn closed(&self, sa: &SocketAddrV4, reason: InactivenessReason) {
-    //     let mut data = self.data.lock().unwrap();
-
-    //     if let Some(entry) = data.get_mut(sa) {
-    //         entry.active = false;
-    //         entry.inactiveness_reason = reason;
-    //         entry.last_connection_instant = Some(Instant::now());
-    //     } // TODO else should be impossible
-    // }
-
-    // TODO this should be mutable... probably?
-    pub fn insert_list(&self, list: &Vec<Peer>) {
-        let mut data = self.data.lock().unwrap();
-
-        for socket_address in list {
-            if let Vacant(entry) = data.entry(socket_address.clone()) {
-                entry.insert(PeerEntry {
-                    active: false,
-                    inactiveness_reason: InactivenessReason::Unknown,
-                    last_connection_instant: None,
-                });
-            }
-        }
-    }
-
     pub fn peer_addresses(&self) -> Vec<Peer> {
         self.data.lock().unwrap().keys().cloned().collect()
+    }
+
+    // I know this name/function is shit but I don't want to block peers more than it's necessary
+    // TODO for later but it's chabuduo for now
+    pub fn return_batch_of_bad_peers_and_get_new_batch(
+        &mut self,
+        bad_peers: &Vec<(Peer, Status)>,
+        limit: usize,
+    ) -> Vec<Peer> {
+        let status_priority_order = [
+            Status::Unknown,
+            Status::NoUsefulPieces,
+            Status::ChokedForTooLong,
+            Status::UnableToConnect,
+        ];
+
+        let mut data = self.data.lock().unwrap();
+
+        self.update_locked_data_with_bad_peers(&mut data, bad_peers);
+
+        self.activate_peers_in_locked_data(&mut data, limit, &status_priority_order)
+    }
+
+    fn update_locked_data_with_bad_peers(
+        &self,
+        data: &mut HashMap<Peer, Status>,
+        bad_peers: &Vec<(Peer, Status)>,
+    ) {
+        for (peer, status) in bad_peers.iter().cloned() {
+            data.insert(peer, status);
+        }
+    }
+
+    fn activate_peers_in_locked_data(
+        &self,
+        data: &mut HashMap<Peer, Status>,
+        limit: usize,
+        status_priority_order: &[Status],
+    ) -> Vec<Peer> {
+        let mut newly_activated_peers = Vec::with_capacity(std::cmp::min(data.len(), limit));
+
+        for cur_status in status_priority_order {
+            let iter = data
+                .iter_mut()
+                .filter_map(|(peer, status)| {
+                    if discriminant(status) == discriminant(&cur_status) {
+                        *status = Status::Active;
+                        Some(peer.to_owned())
+                    } else {
+                        None
+                    }
+                })
+                .take(limit - newly_activated_peers.len());
+
+            newly_activated_peers.extend(iter);
+        }
+
+        newly_activated_peers
+    }
+}
+
+impl<P> Extend<P> for Peers
+where
+    P: Into<Peer>,
+{
+    fn extend<T: IntoIterator<Item = P>>(&mut self, iter: T) {
+        let mut data = self.data.lock().unwrap();
+
+        data.extend(iter.into_iter().map(|peer| (peer.into(), Status::Unknown)));
+    }
+}
+
+impl From<&Peer> for Peer {
+    fn from(value: &Peer) -> Self {
+        value.to_owned()
+    }
+}
+
+impl From<SocketAddrV4> for Peer {
+    fn from(value: SocketAddrV4) -> Self {
+        Self(value)
+    }
+}
+
+impl From<SocketAddr> for Peer {
+    fn from(value: SocketAddr) -> Self {
+        match value {
+            SocketAddr::V4(addr) => Self(addr),
+            SocketAddr::V6(addr) => panic!("no support for IPv6 ({:?})", addr),
+        }
+    }
+}
+
+impl From<Peer> for SocketAddrV4 {
+    fn from(value: Peer) -> Self {
+        value.0
+    }
+}
+
+impl From<Peer> for SocketAddr {
+    fn from(value: Peer) -> Self {
+        SocketAddr::V4(value.0)
     }
 }
 
@@ -176,14 +231,17 @@ pub fn socketaddr_from_compact_bytes(buf: &[u8]) -> Result<SocketAddrV4> {
 
 #[cfg(test)]
 mod tests {
-    use crate::peer::Peer;
+    use super::Peers;
+    use crate::data_structures::id::ID;
+    use crate::peer::{socketaddr_from_compact_bytes, Peer, Status};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 
     #[test]
     fn peer_from_compact() {
         let data = "yhf5aa".as_bytes();
         let result = Peer::from_compact_bytes(data);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().0.to_string(), "121.104.102.53:24929");
+        assert_eq!(result.unwrap().addr().to_string(), "121.104.102.53:24929");
 
         let long_data = "yhf5aa++".as_bytes();
         let result = Peer::from_compact_bytes(long_data);
@@ -192,5 +250,72 @@ mod tests {
         let short_data = "yhf".as_bytes();
         let result = Peer::from_compact_bytes(short_data);
         assert!(result.is_err());
+
+        let short_data = "yhf".as_bytes();
+        let result = socketaddr_from_compact_bytes(short_data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn from_impls() {
+        let _: Peer = (&Peer("127.0.0.1:52".parse().unwrap())).into();
+        let peer: Peer = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 53).into();
+        let _: SocketAddrV4 = peer.into();
+        let peer: Peer = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 54).into();
+        let _: SocketAddr = peer.into();
+    }
+
+    // TODO I don't like this test, but most of the logic is dependent on previous lines.
+    // So if I want to split into 3 tests, I have to just write 1/3 same, 2/3 same and same.
+    // Splitting up into multiple non-test functions might help, I guess, but not really
+    #[test]
+    fn peers() {
+        let info_hash = ID::new(rand::random());
+        let mut peers = Peers::new(&info_hash);
+
+        assert!(peers.serve(&info_hash));
+        assert!(!peers.serve(&ID::new(rand::random())));
+
+        let new_peers: [Peer; 3] = [
+            Peer("127.0.0.1:52".parse().unwrap()),
+            Peer("127.0.0.1:53".parse().unwrap()),
+            Peer("127.0.0.1:54".parse().unwrap()),
+        ];
+
+        // data = [(52, unknown),(53, unknown),(54, unknown)]
+        peers.extend(new_peers.iter());
+
+        let data = peers.data.lock().unwrap();
+        assert_eq!(&Status::Unknown, data.get(&new_peers[0]).unwrap());
+        assert_eq!(&Status::Unknown, data.get(&new_peers[1]).unwrap());
+        assert_eq!(&Status::Unknown, data.get(&new_peers[2]).unwrap());
+        drop(data);
+
+        // data is two actives and one unknown
+        let unknown_peers = peers.return_batch_of_bad_peers_and_get_new_batch(&Vec::new(), 2);
+        let data = peers.data.lock().unwrap();
+
+        // got two peers, in data they're marked as active
+        assert_eq!(2, unknown_peers.len());
+        assert_eq!(&Status::Active, data.get(&unknown_peers[0]).unwrap());
+        assert_eq!(&Status::Active, data.get(&unknown_peers[1]).unwrap());
+
+        let return_peers = vec![(unknown_peers[0].clone(), Status::UnableToConnect)];
+
+        drop(data);
+        let unknown_peers_2 = peers.return_batch_of_bad_peers_and_get_new_batch(&return_peers, 100);
+        let data = peers.data.lock().unwrap();
+
+        // returned 1 and asked for 100 but 1 left + 1 just_returned = 2
+        assert_eq!(2, unknown_peers_2.len());
+        assert_eq!(&Status::Active, data.get(&unknown_peers_2[0]).unwrap());
+        assert_eq!(&Status::Active, data.get(&unknown_peers_2[1]).unwrap());
+        drop(data);
+
+        // returned had known status with lower priority, it's last/second in the list
+        assert_ne!(return_peers[0].0, unknown_peers_2[0]);
+        assert_eq!(return_peers[0].0, unknown_peers_2[1]);
+
+        assert_eq!(3, peers.peer_addresses().len());
     }
 }
