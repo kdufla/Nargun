@@ -1,268 +1,313 @@
-use super::BLOCK_SIZE;
-use crate::peer_message::Piece;
+use super::BLOCK_SIZE as SUPER_BLOCK_SIZE;
+use crate::data_structures::id::ID;
 use crate::unsigned_ceil_div;
-use anyhow::{anyhow, Result};
-use bytes::Bytes;
-use rand::Rng;
+use anyhow::{anyhow, bail, Result};
+use rand::seq::SliceRandom;
+use rand::{thread_rng, Rng};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex as StdMutex};
-use tokio::sync::oneshot;
+use std::sync::{Arc, Mutex as StdMutex, MutexGuard};
+use std::time::Duration;
+use tokio::sync::mpsc;
+use tokio::time::Instant;
 
-// TODO this is shit
+const MAX_PIECES_DOWNLOADING: usize = 10;
+const MAINLINE_TCP_REQUEST_TIMEOUT_SECS: u64 = 7;
+const BLOCK_SIZE: usize = SUPER_BLOCK_SIZE as usize;
+
+#[derive(Debug)]
+pub struct BlockAddress {
+    pub piece_idx: usize,
+    pub block_idx: usize,
+}
+
 #[derive(Clone)]
 pub struct PendingPieces {
-    data: Arc<
-        StdMutex<(
-            usize,
-            Vec<u32>,
-            HashMap<u32, (Chunks, oneshot::Sender<u64>)>,
-        )>,
-    >,
+    piece_length: usize,
+    blocks_per_piece: usize,
+    finish_callback: mpsc::Sender<FinishedPiece>,
+    data: Arc<StdMutex<HashMap<usize, Piece>>>,
+}
+
+#[derive(Debug)]
+pub struct FinishedPiece {
+    pub idx: usize,
+    pub data: Vec<Vec<u8>>,
+}
+
+struct Piece {
+    remaining: usize,
+    pending: usize,
+    downloaded: usize,
+    data: Vec<Block>,
+}
+
+#[derive(Clone)]
+struct PendingBlockDesc {
+    target: ID,
+    time_sent: Instant,
+}
+
+#[derive(Clone)]
+enum Block {
+    Unbegun,
+    Pending(PendingBlockDesc),
+    Downloaded(Vec<u8>),
+}
+
+enum Add {
+    Added,
+    AddedLast(Piece),
 }
 
 impl PendingPieces {
-    pub fn new() -> Self {
+    pub fn new(piece_length: usize, finish_callback: mpsc::Sender<FinishedPiece>) -> Self {
         Self {
-            data: Arc::new(StdMutex::new((0, Vec::new(), HashMap::new()))),
+            piece_length,
+            blocks_per_piece: unsigned_ceil_div!(piece_length, BLOCK_SIZE as usize),
+            finish_callback,
+            data: Arc::new(StdMutex::new(HashMap::with_capacity(
+                MAX_PIECES_DOWNLOADING,
+            ))),
         }
     }
 
-    pub fn add_piece(
-        &mut self,
-        idx: u32,
-        piece_length: u32,
-        finish_callback: oneshot::Sender<u64>,
-    ) {
-        let chunk_count = unsigned_ceil_div!(piece_length, BLOCK_SIZE);
-        let chunks = Chunks::new(chunk_count as usize);
-
+    pub fn add_piece(&mut self, idx: usize) -> Result<()> {
         let mut data = self.data.lock().unwrap();
-        data.1.push(idx);
-        data.2.insert(idx, (chunks, finish_callback));
+
+        if data.contains_key(&idx) {
+            return Ok(());
+        }
+
+        if data.len() >= MAX_PIECES_DOWNLOADING {
+            bail!("Pending is full");
+        }
+
+        data.insert(idx, Piece::new(self.piece_length));
+
+        Ok(())
     }
 
-    pub fn get_random_unbeguns(&self, n: usize) -> Option<Vec<(u32, u32)>> {
+    pub fn add_block_data(
+        &mut self,
+        piece_idx: usize,
+        block_idx: usize,
+        block_data: Vec<u8>,
+        from: &ID,
+    ) -> Result<()> {
+        self.check_block_bounds(block_idx, &block_data)?;
+
+        if let Add::AddedLast(finished_piece) =
+            self.blocking_add_for_valid_block(piece_idx, block_idx, block_data, from)?
+        {
+            let tx = self.finish_callback.clone();
+            tokio::spawn(async move {
+                let _ = tx
+                    .send(FinishedPiece {
+                        data: finished_piece.data.into_iter().map(|b| b.into()).collect(),
+                        idx: piece_idx,
+                    })
+                    .await;
+            });
+        }
+
+        Ok(())
+    }
+
+    pub fn cancel_pending(&mut self, from: &ID) {
         let mut data = self.data.lock().unwrap();
 
-        for _ in 0..data.1.len() {
-            let idx = data.0 % data.1.len();
-
-            data.0 = data.0.wrapping_add(1);
-
-            let p_idx = data.1[idx];
-
-            if let Some(chunks) = data.2.get(&p_idx) {
-                if let Some(c_idxs) = chunks.0.get_unbegun(n) {
-                    return Some(c_idxs.iter().map(|c_idx| (p_idx, *c_idx)).collect());
+        for (_, piece) in data.iter_mut() {
+            for block in piece.data.iter_mut() {
+                if block.is_expected_from(from) {
+                    *block = Block::Unbegun;
                 }
             }
         }
-
-        None
     }
 
-    pub fn remove(&mut self, idx: u32) -> Option<oneshot::Sender<u64>> {
-        let mut data = self.data.lock().unwrap();
-
-        let mut idx_in_vec = None;
-
-        for (i, elem) in data.1.iter().enumerate() {
-            if *elem == idx {
-                idx_in_vec = Some(i);
-                break;
-            }
-        }
-
-        match idx_in_vec {
-            Some(i) => {
-                data.1.remove(i);
-            }
-            None => return None,
-        }
-
-        match data.2.remove(&idx) {
-            Some((_, tx)) => Some(tx),
-            None => None,
-        }
-    }
-
-    pub fn count_pending(&self) -> u32 {
-        self.data
-            .lock()
-            .unwrap()
-            .2
-            .iter()
-            .map(|kv| kv.1 .0.count_pending())
-            .sum()
-    }
-
-    pub fn chunk_requested(&self, piece_idx: u32, chunk_idx: u32) -> Result<()> {
-        match self.data.lock().unwrap().2.get(&piece_idx) {
-            Some(chunks) => {
-                chunks.0.set_pending(chunk_idx as usize);
-                Ok(())
-            }
-            None => Err(anyhow!("piece {} is not being downloaded", piece_idx)),
-        }
-    }
-
-    pub fn store_chunk_get_remaining(&self, piece: &mut Piece) -> Result<u32> {
-        let pieces = &self.data.lock().unwrap().2;
-
-        if pieces.contains_key(&piece.index) && piece.begin % BLOCK_SIZE == 0 {
-            let chunks = pieces.get(&piece.index).unwrap();
-            let block_idx = (piece.begin / BLOCK_SIZE) as usize;
-
-            println!(
-                "chunks.0.len()={}, block_idx={}, chunks.0.is_pending(block_idx)={}",
-                chunks.0.len(),
-                block_idx,
-                chunks.0.is_pending(block_idx)
-            );
-
-            if chunks.0.len() > block_idx && chunks.0.is_pending(block_idx) {
-                chunks.0.set_downloaded(block_idx, piece.block.as_bytes());
-
-                return Ok(chunks.0.remaining());
-            }
-        }
-
-        Err(anyhow!(
-            "chunk not saved: index={:?}, begin={:?}",
-            piece.index,
-            piece.begin
-        ))
-    }
-
-    pub fn cancel_pending(&self) {
-        for kv in self.data.lock().unwrap().2.iter() {
-            kv.1 .0.cancel_pending();
-        }
-    }
-}
-
-#[derive(Clone, PartialEq)]
-enum ChunkDownStatus {
-    Unbegun,
-    Pending,
-    Downloaded(Bytes),
-}
-
-struct Chunks {
-    data: Arc<StdMutex<Vec<ChunkDownStatus>>>,
-}
-
-impl Chunks {
-    fn new(n: usize) -> Self {
-        Self {
-            data: Arc::new(std::sync::Mutex::new(vec![ChunkDownStatus::Unbegun; n])),
-        }
-    }
-
-    fn len(&self) -> usize {
-        self.data.lock().unwrap().len()
-    }
-
-    fn get_unbegun(&self, n: usize) -> Option<Vec<u32>> {
-        if n == 0 {
-            return None;
-        }
+    pub fn take_not_good_blocks(&self, pieces: &[usize], n: usize) -> Vec<BlockAddress> {
+        let mut pieces = pieces.to_owned();
+        let mut rng = thread_rng();
+        pieces.shuffle(&mut rng);
 
         let data = self.data.lock().unwrap();
 
-        if data
+        let iter_over_unbegun =
+            Self::filtered_iter_over_blocks(&pieces, &data, |block| block.is(&Block::Unbegun));
+
+        let iter_over_expired =
+            Self::filtered_iter_over_blocks(&pieces, &data, |block| block.is_expired_pending());
+
+        iter_over_unbegun.chain(iter_over_expired).take(n).collect()
+    }
+
+    // for each piece form the list gets a list of blocks that passes provided closure
+    // just read it..  it looks way more complicated than it actually is
+    fn filtered_iter_over_blocks<'a>(
+        piece_indexes: &'a [usize],
+        data: &'a HashMap<usize, Piece>,
+        filter_closure: fn(&'a Block) -> bool,
+    ) -> impl Iterator<Item = BlockAddress> + 'a {
+        piece_indexes
             .iter()
-            .filter(|chunk| ChunkDownStatus::Unbegun == **chunk)
-            .fold(0, |c, _| c + 1)
-            == 0
-        {
-            None
+            .filter_map(move |&piece_idx| {
+                data.get(&piece_idx).map(|piece| {
+                    piece
+                        .data
+                        .iter()
+                        .enumerate()
+                        .filter_map(move |(block_idx, block)| {
+                            filter_closure(block).then_some(BlockAddress {
+                                piece_idx,
+                                block_idx,
+                            })
+                        })
+                })
+            })
+            .flatten()
+    }
+
+    fn check_block_bounds(&self, block_idx: usize, data: &Vec<u8>) -> Result<()> {
+        if block_idx >= self.blocks_per_piece {
+            bail!(
+                "block index ({}) out of bounds ({})",
+                block_idx,
+                self.blocks_per_piece
+            );
+        }
+
+        let last_block_in_piece = block_idx + 1 == self.blocks_per_piece;
+
+        let block_size = if last_block_in_piece {
+            self.piece_length % BLOCK_SIZE
         } else {
-            let mut rng = rand::thread_rng();
-            let rand_mid_idx = rng.gen_range(0..data.len());
-            let (left, right) = data.split_at(rand_mid_idx);
+            BLOCK_SIZE
+        };
 
-            let mut count_unbegun = 0;
+        if block_size > data.len() {
+            bail!(
+                "block is too small. expected {}, got {}",
+                block_size,
+                data.len()
+            );
+        } else if block_size < data.len() {
+            bail!(
+                "block is too large. expected {}, got {}",
+                block_size,
+                data.len()
+            );
+        }
 
-            let mut unbegun_idxs = Vec::with_capacity(n);
+        Ok(())
+    }
 
-            for (i, chunk) in right.iter().enumerate() {
-                if let ChunkDownStatus::Unbegun = chunk {
-                    unbegun_idxs.push((rand_mid_idx + i) as u32);
-                    count_unbegun += 1;
+    fn blocking_add_for_valid_block(
+        &mut self,
+        piece_idx: usize,
+        block_idx: usize,
+        block_data: Vec<u8>,
+        from: &ID,
+    ) -> Result<Add> {
+        let mut data = self.data.lock().unwrap();
 
-                    if count_unbegun == n {
-                        break;
-                    }
-                }
-            }
+        let Some(piece) = data.get_mut(&piece_idx) else {
+                bail!("piece {} not pending",piece_idx);
+            };
 
-            if count_unbegun != n {
-                for (i, chunk) in left.iter().enumerate() {
-                    if let ChunkDownStatus::Unbegun = chunk {
-                        unbegun_idxs.push(i as u32);
-                        count_unbegun += 1;
+        let block = &mut piece.data[block_idx];
 
-                        if count_unbegun == n {
-                            break;
-                        }
-                    }
-                }
-            }
+        if !block.is_expected_from(from) {
+            bail!("unknown source");
+        }
 
-            if count_unbegun == 0 {
-                None
-            } else {
-                Some(unbegun_idxs)
-            }
+        *block = Block::Downloaded(block_data);
+        piece.downloaded += 1;
+        piece.pending -= 1;
+
+        Ok(if self.blocks_per_piece == piece.downloaded {
+            let finished_piece = data.remove(&piece_idx).unwrap();
+            Add::AddedLast(finished_piece)
+        } else {
+            Add::Added
+        })
+    }
+}
+
+impl Piece {
+    fn new(size: usize) -> Self {
+        let piece_count = unsigned_ceil_div!(size, BLOCK_SIZE as usize);
+        let data = vec![Block::default(); piece_count];
+
+        Self {
+            remaining: piece_count,
+            pending: 0,
+            downloaded: 0,
+            data,
         }
     }
+}
 
-    fn count_pending(&self) -> u32 {
-        self.data
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|chunk| ChunkDownStatus::Pending == **chunk)
-            .fold(0, |c, _| c + 1)
+impl Default for Block {
+    fn default() -> Self {
+        Self::Unbegun
+    }
+}
+
+impl Block {
+    fn is(&self, v: &Self) -> bool {
+        std::mem::discriminant(self) == std::mem::discriminant(v)
     }
 
-    fn remaining(&self) -> u32 {
-        let chunks = self.data.lock().unwrap();
+    fn is_expired_pending(&self) -> bool {
+        let Self::Pending(description) = self else {
+            return false;
+        };
 
-        chunks
-            .iter()
-            .filter(|chunk| ChunkDownStatus::Unbegun == **chunk)
-            .fold(0, |c, _| c + 1)
-            + chunks
-                .iter()
-                .filter(|chunk| ChunkDownStatus::Pending == **chunk)
-                .fold(0, |c, _| c + 1)
+        description.time_sent.elapsed() > Duration::from_secs(MAINLINE_TCP_REQUEST_TIMEOUT_SECS)
     }
 
-    fn cancel_pending(&self) {
-        let mut chunks = self.data.lock().unwrap();
+    fn is_not_expired(&self) -> bool {
+        let Self::Pending(description) = self else {
+            return false;
+        };
 
-        for chunk_idx in 0..chunks.len() {
-            if chunks[chunk_idx] == ChunkDownStatus::Pending {
-                chunks[chunk_idx] = ChunkDownStatus::Unbegun;
-            }
+        description.time_sent.elapsed() < Duration::from_secs(MAINLINE_TCP_REQUEST_TIMEOUT_SECS)
+    }
+
+    fn is_expected_from(&self, target: &ID) -> bool {
+        let Self::Pending(description) = self else {
+            return false;
+        };
+
+        &description.target == target
+    }
+}
+
+impl From<Block> for Vec<u8> {
+    fn from(block: Block) -> Self {
+        match block {
+            Block::Downloaded(data) => data,
+            _ => panic!("block must be Block::Downloaded"),
         }
     }
+}
 
-    // fn set_unbegun(&self, idx: usize) {
-    //     self.data.lock().unwrap()[idx] = ChunkDownStatus::Unbegun;
-    // }
+struct SingleCycleWrappingIter<'a, T> {
+    iter: Box<dyn Iterator<Item = &'a T> + 'a>,
+}
 
-    fn set_pending(&self, idx: usize) {
-        self.data.lock().unwrap()[idx] = ChunkDownStatus::Pending;
+impl<'a, T> SingleCycleWrappingIter<'a, T> {
+    fn new(data: &'a [T], start: usize) -> Self {
+        Self {
+            iter: Box::new(data[start..].iter().chain(data[..start].iter())),
+        }
     }
+}
 
-    fn is_pending(&self, idx: usize) -> bool {
-        self.data.lock().unwrap()[idx] == ChunkDownStatus::Pending
-    }
+impl<'a, T> Iterator for SingleCycleWrappingIter<'a, T> {
+    type Item = &'a T;
 
-    fn set_downloaded(&self, idx: usize, data: Bytes) {
-        self.data.lock().unwrap()[idx] = ChunkDownStatus::Downloaded(data);
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next()
     }
 }
