@@ -18,6 +18,10 @@ impl NoSizeBytes {
         self.0.clone()
     }
 
+    pub fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+
     pub fn len(&self) -> usize {
         self.0.len()
     }

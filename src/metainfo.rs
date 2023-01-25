@@ -92,8 +92,8 @@ impl Info {
         }
     }
 
-    pub fn number_of_pieces(&self) -> u32 {
-        unsigned_ceil_div!(self.pieces.len(), 20) as u32
+    pub fn number_of_pieces(&self) -> usize {
+        unsigned_ceil_div!(self.pieces.len(), 20)
     }
 }
 

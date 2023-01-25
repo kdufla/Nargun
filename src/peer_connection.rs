@@ -4,9 +4,9 @@ pub mod pending_pieces;
 use self::handshake::initiate_handshake;
 use crate::data_structures::id::ID;
 use crate::data_structures::no_size_bytes::NoSizeBytes;
+use crate::peer::Peer;
 use crate::peer_message::{Message, Piece, Request};
 use anyhow::Result;
-use std::net::SocketAddr;
 use tokio::io::{split, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::select;
@@ -26,25 +26,12 @@ pub struct PeerConnection {
 }
 
 impl PeerConnection {
-    pub fn new(
-        peer_id: ID,
-        peer_address: SocketAddr,
-        info_hash: ID,
-        managers: ManagerChannels,
-    ) -> Self {
+    pub fn new(peer: Peer, client_id: ID, info_hash: ID, managers: ManagerChannels) -> Self {
         let (send_tx, send_rx) = mpsc::channel(MESSAGE_CHANNEL_BUFFER);
 
         let send_tx_clone = send_tx.clone();
         tokio::spawn(async move {
-            manage_tcp(
-                peer_id,
-                peer_address,
-                info_hash,
-                managers,
-                send_tx_clone,
-                send_rx,
-            )
-            .await;
+            manage_tcp(client_id, peer, info_hash, managers, send_tx_clone, send_rx).await;
         });
 
         Self {
@@ -58,17 +45,22 @@ impl PeerConnection {
 }
 
 async fn manage_tcp(
-    peer_id: ID,
-    peer_address: SocketAddr,
+    client_id: ID,
+    peer: Peer,
     info_hash: ID,
     managers: ManagerChannels,
     send_tx: mpsc::Sender<Message>,
     send_rx: mpsc::Receiver<Message>,
 ) {
-    let mut stream = match initiate_handshake(&peer_address, &info_hash, &peer_id).await {
+    let manager_messenger = MessageSender {
+        peer: peer.to_owned(),
+        managers,
+    };
+
+    let mut stream = match initiate_handshake(&peer.into(), &info_hash, &client_id).await {
         Ok(s) => s,
         Err(e) => {
-            let _ = managers.connection.send(ConnectionMessage::Unreachable);
+            let _ = manager_messenger.send(ConMessageType::Unreachable).await;
             warn!(?e);
             return;
         }
@@ -82,10 +74,10 @@ async fn manage_tcp(
 
     select! {
         rv = manager_sender(write_stream, send_rx) => {rv},
-        rv = manager_receiver( read_stream, &managers) => {rv},
+        rv = manager_receiver( read_stream, &manager_messenger) => {rv},
     };
 
-    let _ = managers.connection.send(ConnectionMessage::Disconnected);
+    let _ = manager_messenger.send(ConMessageType::Disconnected).await;
 }
 
 async fn manager_sender(
@@ -104,27 +96,14 @@ async fn manager_sender(
     }
 }
 
-async fn manager_receiver(mut stream: ReadHalf<&mut TcpStream>, managers: &ManagerChannels) {
+async fn manager_receiver(mut stream: ReadHalf<&mut TcpStream>, manager_messenger: &MessageSender) {
     let mut buf = vec![0u8; MAX_MESSAGE_BYTES];
     loop {
         let Some(message) = read_message(&mut buf,&mut stream).await else{
-                continue;
-            };
-
-        // TODO do something with this res
-        let _ = match &message {
-            Message::KeepAlive => Ok(()), // TODO impl timeout
-            Message::Choke => managers.connection.send(message.into()).await,
-            Message::Unchoke => managers.connection.send(message.into()).await,
-            Message::Interested => managers.connection.send(message.into()).await,
-            Message::NotInterested => managers.connection.send(message.into()).await,
-            Message::Have(_) => managers.peer_data.send(message.into()).await,
-            Message::Bitfield(_) => managers.peer_data.send(message.into()).await,
-            Message::Request(_) => managers.uploader.send(message.into()).await,
-            Message::Piece(_) => managers.downloader.send(message.into()).await,
-            Message::Cancel(_) => Ok(()), // TODO but nut really unless you're trying to implement end game algorithm
-            Message::Port(_) => managers.dht.send(message.into()).await,
+            continue;
         };
+
+        manager_messenger.send(message.into()).await;
     }
 }
 
@@ -146,17 +125,54 @@ async fn read_message(buf: &mut [u8], stream: &mut ReadHalf<&mut TcpStream>) -> 
     }
 }
 
+struct MessageSender {
+    peer: Peer,
+    managers: ManagerChannels,
+}
+
+impl MessageSender {
+    async fn send(&self, message: ConMessageType) {
+        let m = ConnectionMessage {
+            peer: self.peer.clone(),
+            message,
+        };
+
+        // TODO do something with this
+        let _ = match m.message {
+            ConMessageType::Unreachable => self.managers.connection_status.send(m).await,
+            ConMessageType::Disconnected => self.managers.connection_status.send(m).await,
+            ConMessageType::KeepAlive => Ok(()), // TODO impl timeout
+            ConMessageType::Choke => self.managers.connection_status.send(m).await,
+            ConMessageType::Unchoke => self.managers.connection_status.send(m).await,
+            ConMessageType::Interested => self.managers.connection_status.send(m).await,
+            ConMessageType::NotInterested => self.managers.connection_status.send(m).await,
+            ConMessageType::Have(_) => self.managers.peer_bitmap.send(m).await,
+            ConMessageType::Bitfield(_) => self.managers.peer_bitmap.send(m).await,
+            ConMessageType::Request(_) => self.managers.uploader.send(m).await,
+            ConMessageType::Piece(_) => self.managers.downloader.send(m).await,
+            ConMessageType::Cancel(_) => Ok(()), // TODO but nut really unless you're trying to implement end game algorithm
+            ConMessageType::Port(_) => self.managers.dht.send(m).await,
+        };
+    }
+}
+
 #[derive(Clone)]
 pub struct ManagerChannels {
-    pub connection: mpsc::Sender<ConnectionMessage>,
-    pub peer_data: mpsc::Sender<ConnectionMessage>,
+    pub connection_status: mpsc::Sender<ConnectionMessage>,
+    pub peer_bitmap: mpsc::Sender<ConnectionMessage>,
     pub downloader: mpsc::Sender<ConnectionMessage>,
     pub uploader: mpsc::Sender<ConnectionMessage>,
     pub dht: mpsc::Sender<ConnectionMessage>,
 }
 
-#[derive(Clone)]
-pub enum ConnectionMessage {
+#[derive(Clone, Debug)]
+pub struct ConnectionMessage {
+    pub peer: Peer,
+    pub message: ConMessageType,
+}
+
+#[derive(Clone, Debug)]
+pub enum ConMessageType {
     Unreachable,
     Disconnected,
     KeepAlive,
@@ -172,7 +188,7 @@ pub enum ConnectionMessage {
     Port(u16),
 }
 
-impl From<Message> for ConnectionMessage {
+impl From<Message> for ConMessageType {
     fn from(message: Message) -> Self {
         match message {
             Message::KeepAlive => Self::KeepAlive,

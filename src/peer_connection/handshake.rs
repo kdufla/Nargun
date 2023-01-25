@@ -1,7 +1,7 @@
 use crate::data_structures::id::ID;
 use anyhow::{anyhow, bail, Result};
 use std::mem::size_of;
-use std::net::SocketAddr;
+use std::net::SocketAddrV4;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -10,7 +10,7 @@ const PSTR: &[u8] = b"BitTorrent protocol";
 const HANDSHAKE_LENGTH_FOR_BITTORRENT_PROTOCOL: usize = 68;
 
 pub async fn initiate_handshake(
-    sock_addr: &SocketAddr,
+    sock_addr: &SocketAddrV4,
     info_hash: &ID,
     peer_id: &ID,
 ) -> Result<TcpStream> {

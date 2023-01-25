@@ -6,7 +6,9 @@ pub mod macros;
 pub mod metainfo;
 pub mod peer;
 pub mod peer_connection;
+pub mod peer_manager;
 pub mod peer_message;
+pub mod torrent_manager;
 pub mod tracker;
 
 use anyhow::Result;
@@ -61,14 +63,14 @@ async fn main() -> Result<()> {
     // pieces_downloaded: Arc<AtomicU64>,
     // tx: &broadcast::Sender<bool>,
 
-    let peers = Peers::new(&torrent.info_hash);
-    let (tx, rx) = mpsc::channel(12);
+    // let peers = Peers::new(&torrent.info_hash);
+    // let (tx, rx) = mpsc::channel(12);
 
-    tokio::spawn(async move {
-        dht(peers, torrent.info_hash.clone(), rx).await;
-    });
+    // tokio::spawn(async move {
+    //     dht(peers, torrent.info_hash.clone(), rx).await;
+    // });
 
-    let _ = tx.send(addr).await;
+    // let _ = tx.send(addr).await;
     // let pieces_downloaded = Arc::new(AtomicU64::new(0));
     // let (tx, _) = broadcast::channel(3);
 
@@ -89,8 +91,6 @@ async fn main() -> Result<()> {
     // let info = PeerConnectionInfo::new();
 
     // let pieces = Bitmap::new(torrent.info.number_of_pieces() as u32);
-
-    // let (tx, rx) = mpsc::channel(32);
 
     // let pc = PeerConnection::new(
     //     peer_id,
