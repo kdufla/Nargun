@@ -1,6 +1,6 @@
 use super::krpc_message::Nodes;
-use crate::data_structures::id::{ID, ID_LEN};
-use crate::peer::{socketaddr_from_compact_bytes, COMPACT_SOCKADDR_LEN};
+use crate::data_structures::{ID, ID_LEN};
+use crate::transcoding::{socketaddr_from_compact_bytes, COMPACT_SOCKADDR_LEN};
 use anyhow::{anyhow, bail, Result};
 use rand::{thread_rng, Rng};
 use std::cmp::Ordering;
@@ -478,9 +478,9 @@ mod routing_table_tests {
     use tracing_test::traced_test;
 
     use crate::{
-        data_structures::id::ID,
+        data_structures::ID,
         dht::krpc_message::Nodes,
-        peer::{socketaddr_from_compact_bytes, COMPACT_SOCKADDR_LEN},
+        transcoding::{socketaddr_from_compact_bytes, COMPACT_SOCKADDR_LEN},
     };
 
     use super::{RoutingTable, TreeNode, K_NODE_PER_BUCKET};

@@ -1,11 +1,8 @@
-pub mod handshake;
-pub mod pending_pieces;
-
-use self::handshake::initiate_handshake;
-use crate::data_structures::id::ID;
-use crate::data_structures::no_size_bytes::NoSizeBytes;
-use crate::peer::Peer;
-use crate::peer_message::{Message, Piece, Request};
+use super::handshake::initiate_handshake;
+use super::message::{Message, Piece, Request};
+use crate::client::Peer;
+use crate::data_structures::NoSizeBytes;
+use crate::data_structures::ID;
 use anyhow::Result;
 use tokio::io::{split, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
@@ -21,11 +18,11 @@ pub const KEEP_ALIVE_INTERVAL_SECS: u64 = 100;
 pub const MAX_CONCURRENT_REQUESTS: u32 = 3;
 const MESSAGE_CHANNEL_BUFFER: usize = 1 << 5;
 
-pub struct PeerConnection {
+pub struct Connection {
     manager_tx: mpsc::Sender<Message>,
 }
 
-impl PeerConnection {
+impl Connection {
     pub fn new(peer: Peer, client_id: ID, info_hash: ID, managers: ManagerChannels) -> Self {
         let (send_tx, send_rx) = mpsc::channel(MESSAGE_CHANNEL_BUFFER);
 

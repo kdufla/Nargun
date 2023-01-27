@@ -1,4 +1,4 @@
-use crate::data_structures::id::ID;
+use crate::data_structures::ID;
 use crate::{ok_or_missing_field, unsigned_ceil_div};
 use anyhow::Result;
 use bendy::decoding::{Decoder, FromBencode, Object};
@@ -8,6 +8,8 @@ use std::collections::HashSet;
 use std::fmt;
 use std::fs::File as fsFile;
 use std::io::Read;
+
+// TODO this is the first thing I did. it's shit most likely
 
 #[derive(Debug)]
 pub struct File {
@@ -264,10 +266,8 @@ impl Torrent {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        data_structures::id::ID,
-        metainfo::{from_file, TrackerAddr},
-    };
+    use super::{from_file, TrackerAddr};
+    use crate::data_structures::ID;
 
     const METAINFO_MULTI: &str = "resources/38WarBreaker.torrent";
     const METAINFO_SINGLE: &str = "resources/ubuntu-22.04.1-desktop-amd64.iso.torrent";

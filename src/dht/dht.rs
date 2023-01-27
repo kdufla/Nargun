@@ -1,15 +1,11 @@
-pub mod connection;
-pub mod krpc_message;
-pub mod routing_table;
-use self::{
-    connection::{CommandType, Connection, QueryCommand, RespCommand, MTU},
+use super::{
+    connection::{CommandType, ConCommand, Connection, QueryCommand, RespCommand, MTU},
     krpc_message::{Nodes, ValuesOrNodes},
     routing_table::RoutingTable,
 };
 use crate::{
-    data_structures::id::ID,
-    dht::connection::ConCommand,
-    peer::{Peer, Peers, COMPACT_PEER_LEN},
+    client::{Peer, Peers, COMPACT_PEER_LEN},
+    data_structures::ID,
 };
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
@@ -43,8 +39,14 @@ pub enum DhtCommand {
     FetchPeers(ID),
 }
 
+pub fn start_dht(mut peers: Peers, info_hash: ID, mut peer_with_dht: mpsc::Receiver<SocketAddrV4>) {
+    tokio::spawn(async move {
+        dht(peers, info_hash, peer_with_dht).await;
+    });
+}
+
 // TODO store routing table
-pub async fn dht(mut peers: Peers, info_hash: ID, mut peer_with_dht: mpsc::Receiver<SocketAddrV4>) {
+async fn dht(mut peers: Peers, info_hash: ID, mut peer_with_dht: mpsc::Receiver<SocketAddrV4>) {
     let (mut routing_table, udp_connection, mut dht_command_rx, mut peer_map) =
         setup(&peers, info_hash);
 
@@ -186,7 +188,7 @@ fn find_node(
     };
 
     let command = ConCommand::new(
-        connection::CommandType::Resp(RespCommand::FindNode { nodes }, tid),
+        CommandType::Resp(RespCommand::FindNode { nodes }, tid),
         from,
     );
 
@@ -231,7 +233,7 @@ fn get_peers(
     };
 
     let command = ConCommand::new(
-        connection::CommandType::Resp(RespCommand::GetPeers { values_or_nodes }, tid),
+        CommandType::Resp(RespCommand::GetPeers { values_or_nodes }, tid),
         from,
     );
 
@@ -254,10 +256,7 @@ async fn try_ping_node(connection: &Connection, addr: Option<SocketAddrV4>) -> R
 }
 
 async fn ping_node(connection: &Connection, addr: SocketAddrV4) {
-    let command = ConCommand::new(
-        connection::CommandType::Query(connection::QueryCommand::Ping),
-        addr,
-    );
+    let command = ConCommand::new(CommandType::Query(QueryCommand::Ping), addr);
 
     let _ = connection.send(command).await;
 }

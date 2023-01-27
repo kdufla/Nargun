@@ -1,4 +1,4 @@
-use crate::data_structures::id::ID;
+use crate::data_structures::ID;
 
 #[derive(Debug)]
 pub enum AnnounceEvent {
@@ -72,7 +72,7 @@ impl Announce {
 #[cfg(test)]
 mod tests {
     use super::{Announce, AnnounceEvent};
-    use crate::data_structures::id::{ID, ID_LEN};
+    use crate::data_structures::{ID, ID_LEN};
 
     const TRACKER_URL: &str = "http://example.com/announce";
     const INFO_HASH: [u8; ID_LEN] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0];

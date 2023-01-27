@@ -1,11 +1,8 @@
-pub mod announce;
-pub mod response;
-
-use self::announce::{Announce, AnnounceEvent};
-use self::response::Response;
-use crate::data_structures::id::ID;
-use crate::metainfo::Torrent;
-use crate::peer::Peers;
+use super::announce::{Announce, AnnounceEvent};
+use super::response::Response;
+use crate::client::Peers;
+use crate::data_structures::ID;
+use crate::transcoding::metainfo::Torrent;
 use anyhow::{anyhow, Result};
 use bendy::decoding::{Decoder, FromBencode};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -13,9 +10,10 @@ use std::sync::Arc;
 use tokio::sync::broadcast::{self, Receiver};
 use tokio::time::{interval, Duration, MissedTickBehavior};
 
-pub const ANNOUNCE_RETRY: u8 = 3;
+const ANNOUNCE_RETRY: usize = 3;
 
 async fn fetch_response(url: &String) -> Result<Response> {
+    // TODO lmao I didn't know about let-else
     match reqwest::get(url).await {
         Ok(response) => match response.bytes().await {
             Ok(bytes) => match Decoder::new(bytes.as_ref()).next_object() {
@@ -34,7 +32,7 @@ async fn fetch_response(url: &String) -> Result<Response> {
     }
 }
 
-pub async fn contact_tracker(announce: &Announce) -> Result<Response> {
+async fn contact_tracker(announce: &Announce) -> Result<Response> {
     let announce_url = announce.as_url();
 
     println!("contact: {}", announce_url);
@@ -126,12 +124,12 @@ async fn manage_http_tracker(
     }
 }
 
-pub async fn spawn_tracker_managers(
+pub fn spawn_tracker_managers(
     torrent: &Torrent,
     peer_id: &ID,
     peers: &Peers,
     pieces_downloaded: Arc<AtomicU64>,
-    tx: &broadcast::Sender<bool>,
+    tx: &broadcast::Sender<bool>, // TODO tx? really? nice naming. figure out what this is. that's what you get by kicking the naming-bucket down the road
     tcp_port: u16,
 ) {
     println!("start");

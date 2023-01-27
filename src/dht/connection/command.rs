@@ -1,4 +1,4 @@
-use crate::data_structures::id::ID;
+use crate::data_structures::ID;
 use crate::dht::krpc_message::{Message, Nodes, ValuesOrNodes};
 use bytes::Bytes;
 use std::net::SocketAddrV4;
@@ -93,7 +93,7 @@ mod tests {
     use bytes::Bytes;
 
     use crate::{
-        data_structures::id::ID,
+        data_structures::ID,
         dht::{
             connection::RespCommand,
             krpc_message::{Message, Nodes},

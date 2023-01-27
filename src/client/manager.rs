@@ -1,11 +1,9 @@
-use crate::data_structures::{bitmap::Bitmap, id::ID};
-use crate::peer::{Peer, Peers, Status as PeerStatus};
-use crate::peer_connection::pending_pieces::FinishedPiece;
-use crate::peer_connection::ConMessageType;
-use crate::peer_connection::{
-    pending_pieces::PendingPieces, ConnectionMessage, ManagerChannels, PeerConnection,
+use super::peer::connection::{
+    ConMessageType, Connection, ConnectionMessage, FinishedPiece, ManagerChannels, PendingPieces,
 };
-use crate::peer_manager::manage_peer;
+use super::peer::manage_peer;
+use super::peer::{Peer, Peers, Status as PeerStatus};
+use crate::data_structures::{Bitmap, ID};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -359,16 +357,22 @@ impl TorrentManager {
                 dht: self.dht_tx.clone(),
             };
 
-            let connection = PeerConnection::new(
+            let connection = Connection::new(
                 peer,
                 self.client_id.to_owned(),
                 self.info_hash.to_owned(),
                 managers.to_owned(),
             );
 
-            let pp = self.pending_pieces.clone();
+            let pending_pieces = self.pending_pieces.clone();
             tokio::spawn(async move {
-                manage_peer(connection, download_manager_rx, peer_manager_rx, pp).await;
+                manage_peer(
+                    peer_manager_rx,
+                    pending_pieces,
+                    connection,
+                    download_manager_rx,
+                )
+                .await;
             });
         }
     }

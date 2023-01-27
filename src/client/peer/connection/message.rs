@@ -1,6 +1,5 @@
-use crate::data_structures::no_size_bytes::NoSizeBytes;
-use crate::peer_connection::pending_pieces::BlockAddress;
-use crate::peer_connection::BLOCK_SIZE;
+use super::{BlockAddress, BLOCK_SIZE};
+use crate::data_structures::NoSizeBytes;
 use anyhow::{bail, Result};
 use bincode::Options;
 use bytes::Bytes;
@@ -252,7 +251,7 @@ impl From<BlockAddress> for Request {
 #[cfg(test)]
 mod tests {
     use super::{Message, Piece, Request};
-    use crate::data_structures::no_size_bytes::NoSizeBytes;
+    use crate::data_structures::NoSizeBytes;
     use bytes::Bytes;
     use std::mem::transmute;
 

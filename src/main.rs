@@ -1,25 +1,20 @@
+pub mod client;
 pub mod config;
 pub mod data_structures;
 pub mod dht;
 pub mod gateway_device;
 pub mod macros;
-pub mod metainfo;
-pub mod peer;
-pub mod peer_connection;
-pub mod peer_manager;
-pub mod peer_message;
-pub mod torrent_manager;
-pub mod tracker;
+pub mod transcoding;
 
 use anyhow::Result;
 use tracing::{debug, error, info, warn};
 // use constants::ID_LEN;
+use client::Peers;
 use core::time;
-use dht::dht;
-use peer::Peers;
+use dht::start_dht;
 use std::net::SocketAddrV4;
 // use tokio::sync::broadcast;
-use data_structures::id::ID;
+use data_structures::ID;
 use tokio::{sync::mpsc, time::sleep};
 
 #[tokio::main]
@@ -49,7 +44,7 @@ async fn main() -> Result<()> {
     // let peer_id = ID::new(rand::random());
 
     let config = config::Config::new();
-    let torrent = metainfo::from_file(&config.file);
+    let torrent = transcoding::metainfo::from_file(&config.file);
 
     let (tcp_port, udp_port) = gateway_device::open_any_port()?;
     info!(?tcp_port, ?udp_port);

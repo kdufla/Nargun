@@ -1,11 +1,11 @@
 use super::BLOCK_SIZE as SUPER_BLOCK_SIZE;
-use crate::data_structures::id::ID;
+use crate::data_structures::ID;
 use crate::unsigned_ceil_div;
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 use rand::seq::SliceRandom;
-use rand::{thread_rng, Rng};
+use rand::thread_rng;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex as StdMutex, MutexGuard};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;

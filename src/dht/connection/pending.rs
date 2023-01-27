@@ -1,4 +1,4 @@
-use crate::data_structures::id::{ID, ID_LEN};
+use crate::data_structures::{ID, ID_LEN};
 use crate::dht::krpc_message::{Arguments, Message, Response};
 use bytes::Bytes;
 use std::collections::HashMap;
@@ -60,7 +60,7 @@ impl From<&Response> for RequestType {
 mod tests {
     use super::RequestType;
     use crate::{
-        data_structures::id::{ID, ID_LEN},
+        data_structures::{ID, ID_LEN},
         dht::krpc_message::Message,
     };
     use bytes::Bytes;

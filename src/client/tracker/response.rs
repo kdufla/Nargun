@@ -1,5 +1,6 @@
+use crate::client::Peer;
 use crate::ok_or_missing_field;
-use crate::peer::{socketaddr_from_compact_bytes, Peer, COMPACT_SOCKADDR_LEN};
+use crate::transcoding::{socketaddr_from_compact_bytes, COMPACT_SOCKADDR_LEN};
 use anyhow::Result;
 use bendy::decoding::{FromBencode, Object};
 use bendy::encoding::AsString;
@@ -87,15 +88,12 @@ impl FromBencode for Response {
 
 #[cfg(test)]
 mod tests {
-    use std::net::{Ipv4Addr, SocketAddrV4};
-
+    use super::Response;
+    use crate::client::Peer;
     use anyhow::anyhow;
     use bendy::decoding::{Decoder, FromBencode};
     use bytes::Bytes;
-
-    use crate::peer::Peer;
-
-    use super::Response;
+    use std::net::{Ipv4Addr, SocketAddrV4};
 
     #[test]
     fn parse_response() {
