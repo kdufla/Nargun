@@ -1,6 +1,5 @@
-use crate::data_structures::ID;
-use crate::{ok_or_missing_field, unsigned_ceil_div};
-use anyhow::Result;
+use crate::data_structures::{ID, ID_LEN};
+use crate::ok_or_missing_field;
 use bendy::decoding::{Decoder, FromBencode, Object};
 use bendy::encoding::AsString;
 use openssl::sha;
@@ -21,7 +20,7 @@ pub struct File {
 pub struct Info {
     pub name: String,
     pub piece_length: u64,
-    pub pieces: Vec<u8>,
+    pub pieces: Vec<ID>,
     pub length: Option<u64>,
     pub files: Option<Vec<File>>,
 }
@@ -95,8 +94,27 @@ impl Info {
     }
 
     pub fn number_of_pieces(&self) -> usize {
-        unsigned_ceil_div!(self.pieces.len(), 20)
+        self.pieces.len()
     }
+}
+
+fn deserialize_pieces(mut raw: Vec<u8>) -> Result<Vec<ID>, bendy::decoding::Error> {
+    if raw.is_empty() || raw.len() % ID_LEN > 0 {
+        return Err(bendy::decoding::Error::missing_field(format!(
+            "Info::pieces must be 20-byte SHA1 hash values but it has len={}",
+            raw.len()
+        )));
+    }
+
+    let piece_hashes = unsafe {
+        let length = raw.len() / ID_LEN;
+        let capacity = raw.capacity() / ID_LEN;
+        let ptr = raw.as_mut_ptr() as *mut ID;
+        std::mem::forget(raw);
+        Vec::from_raw_parts(ptr, length, capacity)
+    };
+
+    Ok(piece_hashes)
 }
 
 impl FromBencode for Info {
@@ -116,7 +134,10 @@ impl FromBencode for Info {
                     name = Some(String::decode_bencode_object(value)?);
                 }
                 (b"pieces", value) => {
-                    pieces = AsString::decode_bencode_object(value).map(|bytes| Some(bytes.0))?;
+                    pieces = {
+                        let raw = AsString::decode_bencode_object(value)?.0;
+                        Some(deserialize_pieces(raw)?)
+                    };
                 }
                 (b"length", value) => {
                     length = Some(u64::decode_bencode_object(value)?);
@@ -235,7 +256,7 @@ impl fmt::Display for Torrent {
             self.announce,
             self.info.name,
             self.info.piece_length,
-            self.info.pieces.len() / 20,
+            self.info.pieces.len(),
             self.info.length,
             formatted_files.join(""),
         )
@@ -260,14 +281,14 @@ impl Torrent {
     }
 
     pub fn count_pieces(&self) -> u64 {
-        self.info.pieces.len() as u64 / 20
+        self.info.pieces.len() as u64
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{from_file, TrackerAddr};
-    use crate::data_structures::ID;
+    use crate::{data_structures::ID, unsigned_ceil_div};
 
     const METAINFO_MULTI: &str = "resources/38WarBreaker.torrent";
     const METAINFO_SINGLE: &str = "resources/ubuntu-22.04.1-desktop-amd64.iso.torrent";
@@ -298,11 +319,16 @@ mod tests {
         );
         assert_eq!(torrent.info.name, "WarBreaker");
         assert_eq!(torrent.info.piece_length, 16777216);
-        assert_eq!(*torrent.info.pieces.first().unwrap(), 0xa8);
+        assert_eq!(
+            *torrent.info.pieces.first().unwrap(),
+            ID::new([
+                0xA8, 0xB4, 0x44, 0x51, 0x01, 0x32, 0x24, 0xC9, 0x2D, 0xC9, 0x10, 0x5F, 0xB8, 0x29,
+                0x04, 0xF6, 0xC4, 0x37, 0xB5, 0x91
+            ])
+        );
         assert_eq!(
             torrent.info.pieces.len() as u64,
-            (torrent.info.length() + (torrent.info.piece_length - 1)) / torrent.info.piece_length
-                * 20
+            unsigned_ceil_div!(torrent.info.length(), torrent.info.piece_length)
         );
     }
 
@@ -326,11 +352,16 @@ mod tests {
         assert_eq!(torrent.info.length.unwrap(), 3826831360);
         assert_eq!(torrent.info.name, "ubuntu-22.04.1-desktop-amd64.iso");
         assert_eq!(torrent.info.piece_length, 262144);
-        assert_eq!(*torrent.info.pieces.first().unwrap(), 0x56);
+        assert_eq!(
+            *torrent.info.pieces.first().unwrap(),
+            ID::new([
+                0x56, 0x7B, 0x9B, 0x5C, 0x3D, 0x06, 0x17, 0xB2, 0xDA, 0xAB, 0x0C, 0xE8, 0x88, 0xED,
+                0x2B, 0x9A, 0xC2, 0x33, 0x02, 0xFC
+            ])
+        );
         assert_eq!(
             torrent.info.pieces.len() as u64,
-            (torrent.info.length() + (torrent.info.piece_length - 1)) / torrent.info.piece_length
-                * 20
+            unsigned_ceil_div!(torrent.info.length(), torrent.info.piece_length)
         );
     }
 }
