@@ -138,7 +138,7 @@ pub fn spawn_tracker_managers(
         let tracker_url = tracker.clone();
         let info_hash = torrent.info_hash.clone();
         let peer_id = peer_id.clone();
-        let piece_count = torrent.count_pieces();
+        let piece_count = torrent.count_pieces() as u64;
         let piece_length = torrent.info.piece_length;
         let pieces_downloaded = pieces_downloaded.clone();
         let peers = peers.clone();

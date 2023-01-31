@@ -1,21 +1,34 @@
-pub mod client;
-pub mod config;
-pub mod data_structures;
-pub mod dht;
-pub mod gateway_device;
-pub mod macros;
-pub mod transcoding;
+mod client;
+mod config;
+mod data_structures;
+mod dht;
+// mod fs;
+mod gateway_device;
+mod macros;
+mod transcoding;
 
 use anyhow::Result;
-use tracing::{debug, error, info, warn};
-// use constants::ID_LEN;
 use client::Peers;
 use core::time;
-use dht::start_dht;
-use std::net::SocketAddrV4;
-// use tokio::sync::broadcast;
 use data_structures::ID;
-use tokio::{sync::mpsc, time::sleep};
+use dht::start_dht;
+// use fs::build_dir_tree;
+use std::net::SocketAddrV4;
+use tokio::{
+    sync::mpsc,
+    time::{sleep, Instant},
+};
+use tracing::{debug, error, info, warn};
+use transcoding::metainfo::{Mode, Torrent};
+
+// comments
+// because
+// vscode/rustfmt
+// loves
+// to
+// fuck
+// with
+// tokio::main
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -44,13 +57,25 @@ async fn main() -> Result<()> {
     // let peer_id = ID::new(rand::random());
 
     let config = config::Config::new();
-    let torrent = transcoding::metainfo::from_file(&config.file);
+    let torrent = Torrent::from_file(&config.file).unwrap();
 
-    let (tcp_port, udp_port) = gateway_device::open_any_port()?;
-    info!(?tcp_port, ?udp_port);
+    // let _ = fs::FS::new("base_dir".to_string(), &torrent.info).await;
+
+    // if let Mode::Multi { files } = &torrent.info.mode {
+    //     let now = Instant::now();
+    //     // let x = build_dir_tree("/home/gvelesa/tmp/", "/asimov/", files).await;
+    //     let elapsed = now.elapsed();
+    //     // debug!(?x);
+    //     debug!(?elapsed);
+    // }
+
+    // debug!(?directories);
+
+    // let (tcp_port, udp_port) = gateway_device::open_any_port()?;
+    // info!(?tcp_port, ?udp_port);
 
     // let addr: SocketAddrV4 = "44.242.152.222:8850".parse().unwrap();
-    let addr: SocketAddrV4 = "121.142.222.29:59493".parse().unwrap();
+    // let addr: SocketAddrV4 = "121.142.222.29:59493".parse().unwrap();
     // let addr: SocketAddrV4 = "77.254.210.215:36028".parse().unwrap();
     // torrent: &Torrent,
     // peer_id: &[u8; 20],

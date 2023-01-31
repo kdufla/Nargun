@@ -7,7 +7,12 @@ use std::sync::{atomic::AtomicU64, Arc};
 use crate::{data_structures::ID, transcoding::metainfo::Torrent};
 use tokio::sync::{broadcast, mpsc};
 
-pub use peer::{Peer, Peers, COMPACT_PEER_LEN};
+pub use peer::{
+    connection::{FinishedPiece, BLOCK_SIZE}, // TODO block size being a u32 is not good
+    Peer,
+    Peers,
+    COMPACT_PEER_LEN,
+};
 
 use self::peer::connection::ConnectionMessage;
 

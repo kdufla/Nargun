@@ -1,5 +1,6 @@
 use crate::data_structures::{ID, ID_LEN};
 use crate::ok_or_missing_field;
+use anyhow::{anyhow, Result};
 use bendy::decoding::{Decoder, FromBencode, Object};
 use bendy::encoding::AsString;
 use openssl::sha;
@@ -7,23 +8,9 @@ use std::collections::HashSet;
 use std::fmt;
 use std::fs::File as fsFile;
 use std::io::Read;
+use std::path::Path;
 
-// TODO this is the first thing I did. it's shit most likely
-
-#[derive(Debug)]
-pub struct File {
-    pub path: Vec<String>,
-    pub length: u64,
-}
-
-#[derive(Debug)]
-pub struct Info {
-    pub name: String,
-    pub piece_length: u64,
-    pub pieces: Vec<ID>,
-    pub length: Option<u64>,
-    pub files: Option<Vec<File>>,
-}
+// TODO I'm not gonna touch FromBencode parts, but it's not good. one more reason to get rid of that shit crate.
 
 #[derive(Debug)]
 pub struct Torrent {
@@ -32,137 +19,92 @@ pub struct Torrent {
     pub announce: HashSet<TrackerAddr>,
 }
 
+#[derive(Debug)]
+pub struct Info {
+    pub name: String,
+    pub piece_length: u64,
+    pub pieces: Vec<ID>,
+    pub mode: Mode,
+}
+
+#[derive(Debug)]
+pub enum Mode {
+    Single { length: u64 },
+    Multi { files: Vec<File> },
+}
+
+#[derive(Debug)]
+pub struct File {
+    pub path: Vec<String>,
+    pub length: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TrackerAddr {
     Http(String),
     Udp(String),
 }
 
-pub fn from_buffer(buffer: &[u8]) -> Torrent {
-    Torrent::from_bencode(buffer).unwrap()
-}
-pub fn from_file(filename: &String) -> Torrent {
-    let mut buffer = Vec::new();
+impl Torrent {
+    pub fn from_buf(buf: &[u8]) -> Result<Self> {
+        Ok(Self::from_bencode(buf)?)
+    }
 
-    let mut file = fsFile::open(filename).unwrap();
-    file.read_to_end(&mut buffer).unwrap();
+    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let mut buf = Vec::new();
 
-    from_buffer(buffer.as_slice())
-}
+        let mut file = fsFile::open(path)?;
+        file.read_to_end(&mut buf)?;
 
-impl FromBencode for File {
-    const EXPECTED_RECURSION_DEPTH: usize = 10;
+        Self::from_buf(&buf)
+    }
 
-    fn decode_bencode_object(object: Object) -> Result<Self, bendy::decoding::Error> {
-        let mut path = None;
-        let mut length = None;
+    pub fn is_valid_piece(&self, piece_idx: usize, piece_data: &Vec<Vec<u8>>) -> bool {
+        let expected_hash = &self.info.pieces[piece_idx];
 
-        let mut file = object.try_into_dictionary()?;
-        while let Some(kv) = file.next_pair()? {
-            match kv {
-                (b"path", value) => {
-                    path = Some(Vec::<String>::decode_bencode_object(value)?);
-                }
-                (b"length", value) => {
-                    length = Some(u64::decode_bencode_object(value)?);
-                }
-                _ => (),
-            }
+        let mut hasher = sha::Sha1::new();
+
+        for block in piece_data {
+            hasher.update(&block);
         }
 
-        Ok(File {
-            path: ok_or_missing_field!(path)?,
-            length: ok_or_missing_field!(length)?,
-        })
+        let piece_hash = ID::new(hasher.finish());
+
+        *expected_hash == piece_hash
+    }
+
+    pub fn http_trackers(&self) -> impl Iterator<Item = &String> {
+        self.announce
+            .iter()
+            .filter_map(|tracker_addr| match tracker_addr {
+                TrackerAddr::Http(addr_string) => Some(addr_string),
+                _ => None,
+            })
+    }
+
+    pub fn count_pieces(&self) -> usize {
+        self.info.pieces.len()
     }
 }
 
 impl Info {
-    pub fn in_single_file_mode(&self) -> bool {
-        self.length.is_some()
-    }
-
-    pub fn in_multi_file_mode(&self) -> bool {
-        self.files.is_some()
-    }
-
     pub fn length(&self) -> u64 {
-        match &self.files {
-            Some(files) => files.iter().map(|f| f.length).sum(),
-            None => self.length.unwrap(),
+        match &self.mode {
+            Mode::Single { length } => *length,
+            Mode::Multi { files } => files.iter().map(|file| file.length).sum(),
         }
-    }
-
-    pub fn number_of_pieces(&self) -> usize {
-        self.pieces.len()
     }
 }
 
-fn deserialize_pieces(mut raw: Vec<u8>) -> Result<Vec<ID>, bendy::decoding::Error> {
-    if raw.is_empty() || raw.len() % ID_LEN > 0 {
-        return Err(bendy::decoding::Error::missing_field(format!(
-            "Info::pieces must be 20-byte SHA1 hash values but it has len={}",
-            raw.len()
-        )));
-    }
-
-    let piece_hashes = unsafe {
-        let length = raw.len() / ID_LEN;
-        let capacity = raw.capacity() / ID_LEN;
-        let ptr = raw.as_mut_ptr() as *mut ID;
-        std::mem::forget(raw);
-        Vec::from_raw_parts(ptr, length, capacity)
-    };
-
-    Ok(piece_hashes)
-}
-
-impl FromBencode for Info {
-    const EXPECTED_RECURSION_DEPTH: usize = 10;
-
-    fn decode_bencode_object(object: Object) -> Result<Self, bendy::decoding::Error> {
-        let mut piece_length = None;
-        let mut pieces = None;
-        let mut length = None;
-        let mut name = None;
-        let mut files = None;
-
-        let mut info = object.try_into_dictionary()?;
-        while let Some(kv) = info.next_pair()? {
-            match kv {
-                (b"name", value) => {
-                    name = Some(String::decode_bencode_object(value)?);
-                }
-                (b"pieces", value) => {
-                    pieces = {
-                        let raw = AsString::decode_bencode_object(value)?.0;
-                        Some(deserialize_pieces(raw)?)
-                    };
-                }
-                (b"length", value) => {
-                    length = Some(u64::decode_bencode_object(value)?);
-                }
-                (b"piece length", value) => {
-                    piece_length = Some(u64::decode_bencode_object(value)?);
-                }
-                (b"files", value) => {
-                    files = Some(Vec::<File>::decode_bencode_object(value)?);
-                }
-                _ => (),
-            }
+impl TrackerAddr {
+    fn new(addr: String) -> Result<Self> {
+        if addr.starts_with("udp") {
+            Ok(Self::Udp(addr))
+        } else if addr.starts_with("http") {
+            Ok(Self::Http(addr))
+        } else {
+            Err(anyhow!("tracker addr must be http or udp. got {addr}."))
         }
-
-        if length.is_none() && files.is_none() {
-            return Err(bendy::decoding::Error::missing_field("length and files"));
-        }
-
-        Ok(Info {
-            piece_length: ok_or_missing_field!(piece_length)?,
-            pieces: ok_or_missing_field!(pieces)?,
-            name: ok_or_missing_field!(name)?,
-            length,
-            files,
-        })
     }
 }
 
@@ -193,7 +135,7 @@ impl FromBencode for Torrent {
                 }
                 (b"announce", value) => {
                     if let Some(tracker_addr) =
-                        TrackerAddr::from_string(String::decode_bencode_object(value)?)
+                        TrackerAddr::new(String::decode_bencode_object(value)?).ok()
                     {
                         announce.insert(tracker_addr);
                     }
@@ -202,7 +144,7 @@ impl FromBencode for Torrent {
                     let list = Vec::<Vec<String>>::decode_bencode_object(value)?;
                     for intermediate in list {
                         for url_string in intermediate {
-                            if let Some(tracker_addr) = TrackerAddr::from_string(url_string) {
+                            if let Ok(tracker_addr) = TrackerAddr::new(url_string) {
                                 announce.insert(tracker_addr);
                             }
                         }
@@ -220,82 +162,128 @@ impl FromBencode for Torrent {
     }
 }
 
-impl TrackerAddr {
-    fn from_string(s: String) -> Option<TrackerAddr> {
-        if s.starts_with("udp") {
-            Some(TrackerAddr::Udp(s))
-        } else if s.starts_with("http") {
-            Some(TrackerAddr::Http(s))
-        } else {
-            None
+impl FromBencode for Info {
+    const EXPECTED_RECURSION_DEPTH: usize = 10;
+
+    fn decode_bencode_object(object: Object) -> Result<Self, bendy::decoding::Error> {
+        let mut piece_length = None;
+        let mut pieces = None;
+        let mut mode = None;
+        let mut name = None;
+
+        let mut info = object.try_into_dictionary()?;
+        while let Some(kv) = info.next_pair()? {
+            match kv {
+                (b"name", value) => {
+                    name = Some(String::decode_bencode_object(value)?);
+                }
+                (b"pieces", value) => {
+                    pieces = {
+                        let raw = AsString::decode_bencode_object(value)?.0;
+                        Some(deserialize_pieces_field(raw)?)
+                    };
+                }
+                (b"length", value) => {
+                    mode = Some(Mode::Single {
+                        length: u64::decode_bencode_object(value)?,
+                    });
+                }
+                (b"piece length", value) => {
+                    piece_length = Some(u64::decode_bencode_object(value)?);
+                }
+                (b"files", value) => {
+                    mode = Some(Mode::Multi {
+                        files: Vec::<File>::decode_bencode_object(value)?,
+                    });
+                }
+                _ => (),
+            }
         }
+
+        Ok(Info {
+            piece_length: ok_or_missing_field!(piece_length)?,
+            pieces: ok_or_missing_field!(pieces)?,
+            name: ok_or_missing_field!(name)?,
+            mode: ok_or_missing_field!(mode, "length or files")?,
+        })
     }
+}
+
+impl FromBencode for File {
+    const EXPECTED_RECURSION_DEPTH: usize = 10;
+
+    fn decode_bencode_object(object: Object) -> Result<Self, bendy::decoding::Error> {
+        let mut path = None;
+        let mut length = None;
+
+        let mut file = object.try_into_dictionary()?;
+        while let Some(kv) = file.next_pair()? {
+            match kv {
+                (b"path", value) => {
+                    path = Some(Vec::<String>::decode_bencode_object(value)?);
+                }
+                (b"length", value) => {
+                    length = Some(u64::decode_bencode_object(value)?);
+                }
+                _ => (),
+            }
+        }
+
+        Ok(File {
+            path: ok_or_missing_field!(path)?,
+            length: ok_or_missing_field!(length)?,
+        })
+    }
+}
+
+fn deserialize_pieces_field(mut raw: Vec<u8>) -> Result<Vec<ID>, bendy::decoding::Error> {
+    if raw.is_empty() || raw.len() % ID_LEN > 0 {
+        return Err(bendy::decoding::Error::missing_field(format!(
+            "Info::pieces must be 20-byte SHA1 hash values but it has len={}",
+            raw.len()
+        )));
+    }
+
+    let piece_hashes = unsafe {
+        let length = raw.len() / ID_LEN;
+        let capacity = raw.capacity() / ID_LEN;
+        let ptr = raw.as_mut_ptr() as *mut ID;
+        std::mem::forget(raw);
+        Vec::from_raw_parts(ptr, length, capacity)
+    };
+
+    Ok(piece_hashes)
 }
 
 impl fmt::Display for Torrent {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut formatted_files = Vec::new();
-
-        if let Some(files) = &self.info.files {
-            for (i, file) in files.iter().enumerate() {
-                formatted_files.push(format!(
-                    "file_{:?} length:\t{}\tpath:\t{:?}\n",
-                    i, file.length, file.path
-                ));
-            }
-        };
-
         write!(
             f,
             "announce:\t{:?}\n\
             name:\t\t{}\n\
             piece length:\t{:?}\n\
             piece count:\t{:?}\n\
-            length:\t\t{:?}\n\
-            {}",
+            mode:\t\t{:?}",
             self.announce,
             self.info.name,
             self.info.piece_length,
             self.info.pieces.len(),
-            self.info.length,
-            formatted_files.join(""),
+            self.info.mode,
         )
-    }
-}
-
-impl Torrent {
-    pub fn count_http_announcers(&self) -> usize {
-        self.announce
-            .iter()
-            .fold(0, |count, announcer| match *announcer {
-                TrackerAddr::Http(_) => count + 1,
-                _ => count,
-            })
-    }
-
-    pub fn http_trackers(&self) -> impl Iterator<Item = &String> {
-        self.announce.iter().filter_map(|x| match x {
-            TrackerAddr::Http(s) => Some(s),
-            _ => None,
-        })
-    }
-
-    pub fn count_pieces(&self) -> u64 {
-        self.info.pieces.len() as u64
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{from_file, TrackerAddr};
+    use super::{Mode, Torrent, TrackerAddr};
+    use crate::client::BLOCK_SIZE;
     use crate::{data_structures::ID, unsigned_ceil_div};
-
-    const METAINFO_MULTI: &str = "resources/38WarBreaker.torrent";
-    const METAINFO_SINGLE: &str = "resources/ubuntu-22.04.1-desktop-amd64.iso.torrent";
+    use std::fs;
+    use std::io::Read;
 
     #[test]
     fn multi_parse() {
-        let torrent = from_file(&String::from(METAINFO_MULTI));
+        let torrent = Torrent::from_file(&String::from("resources/38WarBreaker.torrent")).unwrap();
 
         assert_eq!(torrent.announce.len(), 11);
         assert!(torrent.announce.contains(&TrackerAddr::Http(
@@ -308,15 +296,12 @@ mod tests {
                 0x7d, 0x2b, 0xd7, 0x14, 0x50, 0xd7
             ])
         );
-        assert!(torrent.info.length.is_none());
-        assert!(torrent.info.files.is_some());
-        assert_eq!(
-            match &torrent.info.files {
-                Some(files) => files.len(),
-                None => 0,
-            },
-            23
-        );
+        match &torrent.info.mode {
+            Mode::Multi { files } => {
+                assert_eq!(23, files.len())
+            }
+            Mode::Single { .. } => panic!("expected multi file mode"),
+        }
         assert_eq!(torrent.info.name, "WarBreaker");
         assert_eq!(torrent.info.piece_length, 16777216);
         assert_eq!(
@@ -334,7 +319,10 @@ mod tests {
 
     #[test]
     fn single_parse() {
-        let torrent = from_file(&String::from(METAINFO_SINGLE));
+        let torrent = Torrent::from_file(&String::from(
+            "resources/ubuntu-22.04.1-desktop-amd64.iso.torrent",
+        ))
+        .unwrap();
 
         assert_eq!(torrent.announce.len(), 2);
         assert!(torrent.announce.contains(&TrackerAddr::Http(
@@ -347,9 +335,12 @@ mod tests {
                 0x6b, 0xf4, 0x5a, 0xee, 0x1b, 0xc0
             ])
         );
-        assert!(torrent.info.length.is_some());
-        assert!(torrent.info.files.is_none());
-        assert_eq!(torrent.info.length.unwrap(), 3826831360);
+        match torrent.info.mode {
+            Mode::Multi { .. } => panic!("expected single file mode"),
+            Mode::Single { length } => {
+                assert_eq!(3826831360, length);
+            }
+        }
         assert_eq!(torrent.info.name, "ubuntu-22.04.1-desktop-amd64.iso");
         assert_eq!(torrent.info.piece_length, 262144);
         assert_eq!(
@@ -363,5 +354,24 @@ mod tests {
             torrent.info.pieces.len() as u64,
             unsigned_ceil_div!(torrent.info.length(), torrent.info.piece_length)
         );
+    }
+
+    #[test]
+    fn hasher() {
+        let torrent = Torrent::from_file(
+            "resources/RuPauls.Drag.Race.S15E04.1080p.WEB.H264-SPAMnEGGS[rartv]-[rarbg.to].torrent",
+        )
+        .unwrap();
+
+        let blocks_in_piece = torrent.info.piece_length as usize / BLOCK_SIZE as usize;
+        let mut buf = vec![vec![0u8; BLOCK_SIZE as usize]; blocks_in_piece];
+
+        let mut file = fs::File::open("resources/rupaul_piece_01").unwrap();
+
+        for block_buf in buf.iter_mut() {
+            file.read_exact(block_buf).unwrap();
+        }
+
+        assert!(torrent.is_valid_piece(1, &buf));
     }
 }
