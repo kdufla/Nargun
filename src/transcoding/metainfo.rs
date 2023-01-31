@@ -363,8 +363,8 @@ mod tests {
         )
         .unwrap();
 
-        let blocks_in_piece = torrent.info.piece_length as usize / BLOCK_SIZE as usize;
-        let mut buf = vec![vec![0u8; BLOCK_SIZE as usize]; blocks_in_piece];
+        let blocks_in_piece = torrent.info.piece_length as usize / BLOCK_SIZE;
+        let mut buf = vec![vec![0u8; BLOCK_SIZE]; blocks_in_piece];
 
         let mut file = fs::File::open("resources/rupaul_piece_01").unwrap();
 

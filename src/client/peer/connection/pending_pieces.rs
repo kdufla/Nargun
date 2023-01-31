@@ -1,4 +1,4 @@
-use super::BLOCK_SIZE as SUPER_BLOCK_SIZE;
+use super::BLOCK_SIZE;
 use crate::data_structures::ID;
 use crate::unsigned_ceil_div;
 use anyhow::{bail, Result};
@@ -12,7 +12,6 @@ use tokio::time::Instant;
 
 const MAX_PIECES_DOWNLOADING: usize = 10;
 const MAINLINE_TCP_REQUEST_TIMEOUT_SECS: u64 = 7;
-const BLOCK_SIZE: usize = SUPER_BLOCK_SIZE as usize;
 
 #[derive(Debug)]
 pub struct BlockAddress {
@@ -63,7 +62,7 @@ impl PendingPieces {
     pub fn new(piece_length: usize, finish_callback: mpsc::Sender<FinishedPiece>) -> Self {
         Self {
             piece_length,
-            blocks_per_piece: unsigned_ceil_div!(piece_length, BLOCK_SIZE as usize),
+            blocks_per_piece: unsigned_ceil_div!(piece_length, BLOCK_SIZE),
             finish_callback,
             data: Arc::new(StdMutex::new(HashMap::with_capacity(
                 MAX_PIECES_DOWNLOADING,
@@ -235,7 +234,7 @@ impl PendingPieces {
 
 impl Piece {
     fn new(size: usize) -> Self {
-        let piece_count = unsigned_ceil_div!(size, BLOCK_SIZE as usize);
+        let piece_count = unsigned_ceil_div!(size, BLOCK_SIZE);
         let data = vec![Block::default(); piece_count];
 
         Self {

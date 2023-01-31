@@ -242,8 +242,8 @@ impl From<BlockAddress> for Request {
     fn from(value: BlockAddress) -> Self {
         Self {
             index: value.piece_idx as u32,
-            begin: value.block_idx as u32 * BLOCK_SIZE,
-            length: BLOCK_SIZE,
+            begin: (value.block_idx * BLOCK_SIZE) as u32,
+            length: BLOCK_SIZE as u32,
         }
     }
 }

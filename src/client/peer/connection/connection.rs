@@ -11,9 +11,9 @@ use tokio::sync::mpsc;
 use tokio::time::{interval, Duration};
 use tracing::{error, warn};
 
-pub const BLOCK_SIZE: u32 = 1 << 14;
+pub const BLOCK_SIZE: usize = 1 << 14;
 pub const DESCRIPTIVE_DATA_SIZE: usize = 1 << 7;
-pub const MAX_MESSAGE_BYTES: usize = BLOCK_SIZE as usize + DESCRIPTIVE_DATA_SIZE;
+pub const MAX_MESSAGE_BYTES: usize = BLOCK_SIZE + DESCRIPTIVE_DATA_SIZE;
 pub const KEEP_ALIVE_INTERVAL_SECS: u64 = 100;
 pub const MAX_CONCURRENT_REQUESTS: u32 = 3;
 const MESSAGE_CHANNEL_BUFFER: usize = 1 << 5;
