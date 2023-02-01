@@ -2,7 +2,7 @@ mod client;
 mod config;
 mod data_structures;
 mod dht;
-// mod fs;
+mod fs;
 mod gateway_device;
 mod macros;
 mod transcoding;
