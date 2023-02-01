@@ -1,5 +1,6 @@
+use crate::client::BLOCK_SIZE;
 use crate::data_structures::{ID, ID_LEN};
-use crate::ok_or_missing_field;
+use crate::{ok_or_missing_field, unsigned_ceil_div};
 use anyhow::{anyhow, Result};
 use bendy::decoding::{Decoder, FromBencode, Object};
 use bendy::encoding::AsString;
@@ -60,17 +61,9 @@ impl Torrent {
     }
 
     pub fn is_valid_piece(&self, piece_idx: usize, piece_data: &Vec<Vec<u8>>) -> bool {
-        let expected_hash = &self.info.pieces[piece_idx];
-
-        let mut hasher = sha::Sha1::new();
-
-        for block in piece_data {
-            hasher.update(&block);
-        }
-
-        let piece_hash = ID::new(hasher.finish());
-
-        *expected_hash == piece_hash
+        piece_data.len() == unsigned_ceil_div!(self.info.piece_length as usize, BLOCK_SIZE)
+            && piece_data.iter().all(|block| block.len() == BLOCK_SIZE)
+            && self.info.pieces[piece_idx] == Self::piece_hash(piece_data)
     }
 
     pub fn http_trackers(&self) -> impl Iterator<Item = &String> {
@@ -84,6 +77,152 @@ impl Torrent {
 
     pub fn count_pieces(&self) -> usize {
         self.info.pieces.len()
+    }
+
+    fn piece_hash(piece_data: &Vec<Vec<u8>>) -> ID {
+        let mut hasher = sha::Sha1::new();
+
+        for block in piece_data {
+            hasher.update(&block);
+        }
+
+        ID::new(hasher.finish())
+    }
+}
+
+#[cfg(test)]
+impl Torrent {
+    pub fn mock_single() -> (Vec<Vec<Vec<u8>>>, Self) {
+        use rand::{distributions::Alphanumeric, Rng};
+
+        let mut rng = rand::thread_rng();
+        let info_hash = ID::new(rng.gen());
+        let piece_length = 1 << rng.gen_range(15..18);
+        let piece_count = rng.gen_range(4..8);
+        let block_per_piece = unsigned_ceil_div!(piece_length, BLOCK_SIZE);
+        let file_length =
+            rng.gen_range((((piece_count - 1) * piece_length) + 1)..(piece_count * piece_length)); // somewhere within last piece
+
+        let mut data: Vec<Vec<Vec<u8>>> = (0..piece_count)
+            .map(|_| {
+                (0..block_per_piece)
+                    .map(|_| (0..BLOCK_SIZE).map(|_| rng.gen()).collect())
+                    .collect()
+            })
+            .collect();
+
+        let data_in_last_piece = file_length % piece_length;
+        let last_block_with_data = data_in_last_piece / BLOCK_SIZE;
+        let data_in_last_block = data_in_last_piece % BLOCK_SIZE;
+
+        data.last_mut().unwrap()[last_block_with_data + 1..]
+            .iter_mut()
+            .for_each(|block| *block = vec![0; BLOCK_SIZE]);
+
+        data.last_mut()
+            .unwrap()
+            .get_mut(last_block_with_data)
+            .unwrap()[data_in_last_block..]
+            .iter_mut()
+            .for_each(|byte| *byte = 0);
+
+        let piece_hashes: Vec<ID> = data.iter().map(|piece| Self::piece_hash(piece)).collect();
+
+        let info = Info {
+            name: rng
+                .sample_iter(&Alphanumeric)
+                .take(8)
+                .map(char::from)
+                .collect(),
+            piece_length: piece_length as u64,
+            pieces: piece_hashes,
+            mode: Mode::Single {
+                length: file_length as u64,
+            },
+        };
+
+        (
+            data,
+            Self {
+                info_hash,
+                announce: HashSet::from([
+                    TrackerAddr::Http("http://open.acgnxtracker.com:80/announce".to_string()),
+                    TrackerAddr::Http("https://tracker2.dler.org:80/announce".to_string()),
+                    TrackerAddr::Udp("udp://exodus.desync.com:6969/announce".to_string()),
+                ]),
+                info,
+            },
+        )
+    }
+
+    pub fn mock_multi() -> (Vec<Vec<Vec<u8>>>, Self) {
+        use rand::{distributions::Alphanumeric, seq::SliceRandom, Rng};
+
+        let (data, mut single_mock) = Self::mock_single();
+
+        let mut rng = rand::thread_rng();
+
+        let number_of_files = rng.gen_range(2..10);
+
+        let dir_names: Vec<String> = (0..8)
+            .map(|_| {
+                rand::thread_rng()
+                    .sample_iter(&Alphanumeric)
+                    .take(6)
+                    .map(char::from)
+                    .collect()
+            })
+            .collect();
+
+        let file_names: Vec<String> = (0..8)
+            .map(|_| {
+                rand::thread_rng()
+                    .sample_iter(&Alphanumeric)
+                    .take(10)
+                    .map(char::from)
+                    .collect()
+            })
+            .collect();
+
+        let torrent_size = single_mock.info.piece_length * single_mock.info.pieces.len() as u64;
+        let mut file_ends: Vec<u64> = (0..number_of_files - 1)
+            .map(|_| rng.gen_range(0..torrent_size - 1))
+            .collect();
+        file_ends.push(single_mock.info.length()); // one that ends in last piece
+
+        file_ends.sort();
+
+        let mut prev_end = 0;
+        for file_end in file_ends.iter_mut() {
+            let tmp = *file_end;
+            *file_end -= prev_end;
+            prev_end = tmp;
+        }
+
+        let file_lengths = file_ends;
+
+        let mut files: Vec<File> = file_lengths
+            .into_iter()
+            .map(|length| {
+                let file_depth = rng.gen_range(1..6);
+
+                File {
+                    length,
+                    path: dir_names
+                        .choose_multiple(&mut rng, file_depth)
+                        .cloned()
+                        .collect(),
+                }
+            })
+            .collect();
+
+        for (idx, file) in files.iter_mut().enumerate() {
+            file.path
+                .push(format!("{}{}", file_names.choose(&mut rng).unwrap(), idx))
+        }
+
+        single_mock.info.mode = Mode::Multi { files };
+        (data, single_mock)
     }
 }
 
@@ -356,6 +495,8 @@ mod tests {
         );
     }
 
+    // future G, when you inevitably get a bilbo moment and start wondering "why shouldn't I?"
+    // mock is cool but you need a real piece to make sure that hasher works. don't delete this test.
     #[test]
     fn hasher() {
         let torrent = Torrent::from_file(
@@ -373,5 +514,19 @@ mod tests {
         }
 
         assert!(torrent.is_valid_piece(1, &buf));
+    }
+
+    #[test]
+    fn mock() {
+        let (data, torrent) = Torrent::mock_multi();
+
+        assert_eq!(
+            torrent.info.pieces.len(),
+            unsigned_ceil_div!(torrent.info.length(), torrent.info.piece_length) as usize
+        );
+
+        for (piece_idx, piece_data) in data.iter().enumerate() {
+            assert!(torrent.is_valid_piece(piece_idx, piece_data))
+        }
     }
 }
