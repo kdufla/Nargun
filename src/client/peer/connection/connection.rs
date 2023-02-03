@@ -57,7 +57,7 @@ async fn manage_tcp(
     let mut stream = match initiate_handshake(&peer.into(), &info_hash, &client_id).await {
         Ok(s) => s,
         Err(e) => {
-            let _ = manager_messenger.send(ConMessageType::Unreachable).await;
+            manager_messenger.send(ConMessageType::Unreachable).await;
             warn!(?e);
             return;
         }
@@ -74,7 +74,7 @@ async fn manage_tcp(
         rv = manager_receiver( read_stream, &manager_messenger) => {rv},
     };
 
-    let _ = manager_messenger.send(ConMessageType::Disconnected).await;
+    manager_messenger.send(ConMessageType::Disconnected).await;
 }
 
 async fn manager_sender(
@@ -210,7 +210,7 @@ async fn keep_alive_sender(conn_send_tx: mpsc::Sender<Message>) {
     loop {
         interval.tick().await;
 
-        if let Err(_) = conn_send_tx.send(Message::KeepAlive).await {
+        if conn_send_tx.send(Message::KeepAlive).await.is_err() {
             break;
         }
     }

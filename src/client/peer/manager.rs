@@ -19,7 +19,7 @@ pub async fn manage_peer(
     let _ = connection.send(message).await;
 
     select! {
-        rv = download_manager_rx.recv() => {},
-        rv = peer_manager_rx.recv() => {},
+        _rv = download_manager_rx.recv() => {},
+        _rv = peer_manager_rx.recv() => {},
     };
 }

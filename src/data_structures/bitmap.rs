@@ -40,7 +40,7 @@ impl Bitmap {
         let byte_idx = i / 8;
         let bit_offset = i % 8;
 
-        let bit_getter = 0b1000_0000u8 as u8 >> bit_offset;
+        let bit_getter = 0b1000_0000_u8 >> bit_offset;
 
         bit_getter & self.data[byte_idx] > 0
     }
@@ -96,7 +96,7 @@ impl<'a> Iterator for Iter<'a> {
 
         let rv = 0b1000_0000 & self.cur_byte > 0;
 
-        self.cur_byte = self.cur_byte << 1;
+        self.cur_byte <<= 1;
         self.cur_idx += 1;
 
         Some(rv)

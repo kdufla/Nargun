@@ -35,7 +35,7 @@ async fn fetch_response(url: &String) -> Result<Response> {
 async fn contact_tracker(announce: &Announce) -> Result<Response> {
     let announce_url = announce.as_url();
 
-    println!("contact: {}", announce_url);
+    println!("contact: {announce_url}");
 
     let mut tracker_response = fetch_response(&announce_url).await;
 
@@ -65,7 +65,7 @@ async fn manage_http_tracker(
     mut announce_event_message: Receiver<bool>,
     tcp_port: u16,
 ) {
-    println!("spawned {}", tracker_url);
+    println!("spawned {tracker_url}");
     let mut announce = Announce {
         tracker_url,
         info_hash,
@@ -134,7 +134,7 @@ pub fn spawn_tracker_managers(
 ) {
     println!("start");
     for tracker in torrent.http_trackers() {
-        println!("start: {}", tracker);
+        println!("start: {tracker}");
         let tracker_url = tracker.clone();
         let info_hash = torrent.info_hash.clone();
         let peer_id = peer_id.clone();

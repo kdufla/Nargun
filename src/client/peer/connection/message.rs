@@ -273,10 +273,6 @@ mod tests {
         assert_eq!(&buf[..raw_message.len()], bytes.as_ref());
     }
 
-    fn ser_u32_be(i: u32) -> [u8; 4] {
-        unsafe { transmute(i.to_be()) }
-    }
-
     #[test]
     fn keep_alive() {
         let raw_message = [0, 0, 0, 0];
@@ -314,10 +310,10 @@ mod tests {
 
     #[test]
     fn have() {
-        let piece_index = 726049813;
+        let piece_index: u32 = 726049813;
 
         let mut raw_message = [0, 0, 0, 5, 4, 0, 0, 0, 0];
-        raw_message[5..9].copy_from_slice(&ser_u32_be(piece_index));
+        raw_message[5..9].copy_from_slice(&piece_index.to_be_bytes());
 
         let message = Message::Have(piece_index);
 
@@ -337,14 +333,14 @@ mod tests {
 
     #[test]
     fn request() {
-        let index = 726049813;
-        let begin = 3456;
-        let length = 11166679;
+        let index: u32 = 726049813;
+        let begin: u32 = 3456;
+        let length: u32 = 11166679;
 
         let mut raw_message = [0, 0, 0, 13, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-        raw_message[5..9].copy_from_slice(&ser_u32_be(index));
-        raw_message[9..13].copy_from_slice(&ser_u32_be(begin));
-        raw_message[13..17].copy_from_slice(&ser_u32_be(length));
+        raw_message[5..9].copy_from_slice(&index.to_be_bytes());
+        raw_message[9..13].copy_from_slice(&begin.to_be_bytes());
+        raw_message[13..17].copy_from_slice(&length.to_be_bytes());
 
         let message = Message::Request(Request {
             index,
@@ -357,14 +353,14 @@ mod tests {
 
     #[test]
     fn piece() {
-        let index = 726049813;
-        let begin = 3456;
+        let index: u32 = 726049813;
+        let begin: u32 = 3456;
 
         let mut raw_message = [
             0, 0, 0, 20, 7, 0, 0, 0, 0, 0, 0, 0, 0, 247, 251, 239, 152, 196, 66, 34, 33, 90, 29, 97,
         ];
-        raw_message[5..9].copy_from_slice(&ser_u32_be(index));
-        raw_message[9..13].copy_from_slice(&ser_u32_be(begin));
+        raw_message[5..9].copy_from_slice(&index.to_be_bytes());
+        raw_message[9..13].copy_from_slice(&begin.to_be_bytes());
 
         let block = NoSizeBytes::new(Bytes::copy_from_slice(&raw_message[13..]));
 
@@ -379,14 +375,14 @@ mod tests {
 
     #[test]
     fn cancel() {
-        let index = 726049813;
-        let begin = 3456;
-        let length = 11166679;
+        let index: u32 = 726049813;
+        let begin: u32 = 3456;
+        let length: u32 = 11166679;
 
         let mut raw_message = [0, 0, 0, 13, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-        raw_message[5..9].copy_from_slice(&ser_u32_be(index));
-        raw_message[9..13].copy_from_slice(&ser_u32_be(begin));
-        raw_message[13..17].copy_from_slice(&ser_u32_be(length));
+        raw_message[5..9].copy_from_slice(&index.to_be_bytes());
+        raw_message[9..13].copy_from_slice(&begin.to_be_bytes());
+        raw_message[13..17].copy_from_slice(&length.to_be_bytes());
 
         let message = Message::Cancel(Request {
             index,

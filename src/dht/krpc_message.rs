@@ -104,10 +104,10 @@ pub enum Nodes {
     Closest(Vec<Node>),
 }
 
-pub type TID = [u8; 5];
+pub type Tid = [u8; 5];
 
 impl Message {
-    pub fn to_bytes(self) -> Result<Vec<u8>> {
+    pub fn into_bytes(self) -> Result<Vec<u8>> {
         bendy::serde::to_bytes(&self).map_err(|e| anyhow!("{}", e))
     }
 
@@ -126,7 +126,7 @@ impl Message {
 
     pub fn ping_query(id: &ID) -> Self {
         Self::Query {
-            transaction_id: NoSizeBytes::new(Bytes::from(Vec::from(rand::random::<TID>()))),
+            transaction_id: NoSizeBytes::new(Bytes::from(Vec::from(rand::random::<Tid>()))),
             msg_type: MessageType(b'q'),
             method_name: "ping".to_string(),
             arguments: Arguments::Ping { id: id.to_owned() },
@@ -143,7 +143,7 @@ impl Message {
 
     pub fn find_nodes_query(id: &ID, target: &ID) -> Self {
         Self::Query {
-            transaction_id: NoSizeBytes::new(Bytes::from(Vec::from(rand::random::<TID>()))),
+            transaction_id: NoSizeBytes::new(Bytes::from(Vec::from(rand::random::<Tid>()))),
             msg_type: MessageType(b'q'),
             method_name: "find_node".to_string(),
             arguments: Arguments::FindNode {
@@ -166,7 +166,7 @@ impl Message {
 
     pub fn get_peers_query(id: &ID, info_hash: &ID) -> Self {
         Self::Query {
-            transaction_id: NoSizeBytes::new(Bytes::from(Vec::from(rand::random::<TID>()))),
+            transaction_id: NoSizeBytes::new(Bytes::from(Vec::from(rand::random::<Tid>()))),
             msg_type: MessageType(b'q'),
             method_name: "get_peers".to_string(),
             arguments: Arguments::GetPeers {
@@ -195,7 +195,7 @@ impl Message {
 
     pub fn announce_peer_query(id: &ID, info_hash: &ID, port: u16, token: Bytes) -> Self {
         Self::Query {
-            transaction_id: NoSizeBytes::new(Bytes::from(Vec::from(rand::random::<TID>()))),
+            transaction_id: NoSizeBytes::new(Bytes::from(Vec::from(rand::random::<Tid>()))),
             msg_type: MessageType(b'q'),
             method_name: "announce_peer".to_string(),
             arguments: Arguments::AnnouncePeer {
@@ -272,7 +272,7 @@ impl<'de> Deserialize<'de> for MessageType {
             }
         }
 
-        Ok(deserializer.deserialize_byte_buf(Visitor {})?)
+        deserializer.deserialize_byte_buf(Visitor {})
     }
 }
 
@@ -361,7 +361,7 @@ impl<'de> Deserialize<'de> for Nodes {
                 if data_len_is_multiple_of_node_len {
                     return Err(serde::de::Error::invalid_length(
                         v.len(),
-                        &format!("k*{}", COMPACT_NODE_LEN).as_str(),
+                        &format!("k*{COMPACT_NODE_LEN}").as_str(),
                     ));
                 }
 
@@ -382,7 +382,7 @@ impl<'de> Deserialize<'de> for Nodes {
             }
         }
 
-        Ok(deserializer.deserialize_byte_buf(Visitor {})?)
+        deserializer.deserialize_byte_buf(Visitor {})
     }
 }
 
@@ -400,31 +400,24 @@ mod krpc_tests {
                 encoded.push(b);
             }
 
-            encoded.extend_from_slice("1:y1:qe".as_bytes());
+            encoded.extend_from_slice(b"1:y1:qe");
             encoded
         }};
     }
 
     #[test]
     fn node_from_compact() {
-        let data = "qwertyuiopasdfghjklzyhf5aa".as_bytes();
-        let result = Node::from_compact_bytes(data);
-        assert!(result.is_ok());
-        let result = result.unwrap();
-        assert_eq!(result.addr.to_string(), "121.104.102.53:24929");
-        assert_eq!(
-            result.id,
-            ID::new([
-                b'q', b'w', b'e', b'r', b't', b'y', b'u', b'i', b'o', b'p', b'a', b's', b'd', b'f',
-                b'g', b'h', b'j', b'k', b'l', b'z'
-            ])
-        );
+        let data = b"qwertyuiopasdfghjklzyhf5aa";
+        let result = Node::from_compact_bytes(data).unwrap();
 
-        let long_data = "qwertyuiopasdfghjklzyhf5aayhf5aa++".as_bytes();
+        assert_eq!(result.addr.to_string(), "121.104.102.53:24929");
+        assert_eq!(result.id, ID::new(b"qwertyuiopasdfghjklz".to_owned()));
+
+        let long_data = b"qwertyuiopasdfghjklzyhf5aayhf5aa++";
         let result = Node::from_compact_bytes(long_data);
         assert!(result.is_err());
 
-        let short_data = "yhf".as_bytes();
+        let short_data = b"yhf";
         let result = Node::from_compact_bytes(short_data);
         assert!(result.is_err());
     }
@@ -445,10 +438,7 @@ mod krpc_tests {
 
         #[test]
         fn ping_query() {
-            let message = Message::ping_query(&ID::new([
-                97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54, 55, 56,
-                57,
-            ]));
+            let message = Message::ping_query(&ID::new(b"abcdefghij0123456789".to_owned()));
 
             let tid = match &message {
                 Message::Query { transaction_id, .. } => transaction_id.as_bytes(),
@@ -464,30 +454,21 @@ mod krpc_tests {
         #[test]
         fn ping_resp() {
             let message = Message::ping_resp(
-                &ID::new([
-                    109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 49, 50,
-                    51, 52, 53, 54,
-                ]),
+                &ID::new(b"mnopqrstuvwxyz123456".to_owned()),
                 Bytes::from_static(b"aa"),
             );
 
             assert_eq!(
                 bendy::serde::to_bytes(&message).unwrap(),
-                "d1:rd2:id20:mnopqrstuvwxyz123456e1:t2:aa1:y1:re".as_bytes()
+                b"d1:rd2:id20:mnopqrstuvwxyz123456e1:t2:aa1:y1:re"
             );
         }
 
         #[test]
         fn find_nodes_query() {
             let message = Message::find_nodes_query(
-                &ID::new([
-                    97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54, 55,
-                    56, 57,
-                ]),
-                &ID::new([
-                    109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 49, 50,
-                    51, 52, 53, 54,
-                ]),
+                &ID::new(b"abcdefghij0123456789".to_owned()),
+                &ID::new(b"mnopqrstuvwxyz123456".to_owned()),
             );
 
             let tid = match &message {
@@ -507,54 +488,40 @@ mod krpc_tests {
         #[test]
         fn find_nodes_resp_closest() {
             let message = Message::find_nodes_resp(
-                &ID::new([
-                    48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 97, 98, 99, 100, 101, 102, 103, 104,
-                    105, 106,
-                ]),
+                &ID::new(b"0123456789abcdefghij".to_owned()),
                 Nodes::Closest(vec![
-                    Node::from_compact_bytes("rdYAxWC9Zi!A97zKJUbH9HVcgP".as_bytes()).unwrap(),
-                    Node::from_compact_bytes("7Z5cQScmZcC4M2hYKy!JrcYPtT".as_bytes()).unwrap(),
-                    Node::from_compact_bytes("9^jy^pm8sZQy3dukB$CF9^o@of".as_bytes()).unwrap(),
+                    Node::from_compact_bytes(b"rdYAxWC9Zi!A97zKJUbH9HVcgP").unwrap(),
+                    Node::from_compact_bytes(b"7Z5cQScmZcC4M2hYKy!JrcYPtT").unwrap(),
+                    Node::from_compact_bytes(b"9^jy^pm8sZQy3dukB$CF9^o@of").unwrap(),
                 ]),
                 Bytes::from_static(b"aa"),
             );
 
             assert_eq!(
                 bendy::serde::to_bytes(&message).unwrap(),
-                "d1:rd2:id20:0123456789abcdefghij5:nodes78:rdYAxWC9Zi!A97zKJUbH9HVcgP7Z5cQScmZcC4M2hYKy!JrcYPtT9^jy^pm8sZQy3dukB$CF9^o@ofe1:t2:aa1:y1:re".as_bytes()
+                b"d1:rd2:id20:0123456789abcdefghij5:nodes78:rdYAxWC9Zi!A97zKJUbH9HVcgP7Z5cQScmZcC4M2hYKy!JrcYPtT9^jy^pm8sZQy3dukB$CF9^o@ofe1:t2:aa1:y1:re"
             );
         }
 
         #[test]
         fn find_nodes_resp_exact() {
             let message = Message::find_nodes_resp(
-                &ID::new([
-                    48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 97, 98, 99, 100, 101, 102, 103, 104,
-                    105, 106,
-                ]),
-                Nodes::Exact(
-                    Node::from_compact_bytes("rdYAxWC9Zi!A97zKJUbH9HVcgP".as_bytes()).unwrap(),
-                ),
+                &ID::new(b"0123456789abcdefghij".to_owned()),
+                Nodes::Exact(Node::from_compact_bytes(b"rdYAxWC9Zi!A97zKJUbH9HVcgP").unwrap()),
                 Bytes::from_static(b"aa"),
             );
 
             assert_eq!(
                 bendy::serde::to_bytes(&message).unwrap(),
-                "d1:rd2:id20:0123456789abcdefghij5:nodes26:rdYAxWC9Zi!A97zKJUbH9HVcgPe1:t2:aa1:y1:re".as_bytes()
+                b"d1:rd2:id20:0123456789abcdefghij5:nodes26:rdYAxWC9Zi!A97zKJUbH9HVcgPe1:t2:aa1:y1:re"
             );
         }
 
         #[test]
         fn get_peers_query() {
             let message = Message::get_peers_query(
-                &ID::new([
-                    97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54, 55,
-                    56, 57,
-                ]),
-                &ID::new([
-                    109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 49, 50,
-                    51, 52, 53, 54,
-                ]),
+                &ID::new(b"abcdefghij0123456789".to_owned()),
+                &ID::new(b"mnopqrstuvwxyz123456".to_owned()),
             );
 
             let tid = match &message {
@@ -574,10 +541,7 @@ mod krpc_tests {
         #[test]
         fn get_peers_resp_vals() {
             let message = Message::get_peers_resp(
-                &ID::new([
-                    97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54, 55,
-                    56, 57,
-                ]),
+                &ID::new(b"abcdefghij0123456789".to_owned()),
                 Bytes::from_static(b"aoeusnth"),
                 ValuesOrNodes::Values {
                     values: vec![
@@ -596,23 +560,20 @@ mod krpc_tests {
 
             assert_eq!(
                 bendy::serde::to_bytes(&message).unwrap(),
-                "d1:rd2:id20:abcdefghij01234567895:token8:aoeusnth6:valuesl6:axje.u6:idhtnmee1:t2:aa1:y1:re".as_bytes()
+                b"d1:rd2:id20:abcdefghij01234567895:token8:aoeusnth6:valuesl6:axje.u6:idhtnmee1:t2:aa1:y1:re"
             );
         }
 
         #[test]
         fn get_peers_resp_nodes() {
             let message = Message::get_peers_resp(
-                &ID::new([
-                    97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54, 55,
-                    56, 57,
-                ]),
+                &ID::new(b"abcdefghij0123456789".to_owned()),
                 Bytes::from_static(b"aoeusnth"),
                 ValuesOrNodes::Nodes {
                     nodes: Nodes::Closest(vec![
-                        Node::from_compact_bytes("rdYAxWC9Zi!A97zKJUbH9HVcgP".as_bytes()).unwrap(),
-                        Node::from_compact_bytes("7Z5cQScmZcC4M2hYKy!JrcYPtT".as_bytes()).unwrap(),
-                        Node::from_compact_bytes("9^jy^pm8sZQy3dukB$CF9^o@of".as_bytes()).unwrap(),
+                        Node::from_compact_bytes(b"rdYAxWC9Zi!A97zKJUbH9HVcgP").unwrap(),
+                        Node::from_compact_bytes(b"7Z5cQScmZcC4M2hYKy!JrcYPtT").unwrap(),
+                        Node::from_compact_bytes(b"9^jy^pm8sZQy3dukB$CF9^o@of").unwrap(),
                     ]),
                 },
                 Bytes::from_static(b"aa"),
@@ -620,21 +581,15 @@ mod krpc_tests {
 
             assert_eq!(
                 bendy::serde::to_bytes(&message).unwrap(),
-                "d1:rd2:id20:abcdefghij01234567895:nodes78:rdYAxWC9Zi!A97zKJUbH9HVcgP7Z5cQScmZcC4M2hYKy!JrcYPtT9^jy^pm8sZQy3dukB$CF9^o@of5:token8:aoeusnthe1:t2:aa1:y1:re".as_bytes()
+                b"d1:rd2:id20:abcdefghij01234567895:nodes78:rdYAxWC9Zi!A97zKJUbH9HVcgP7Z5cQScmZcC4M2hYKy!JrcYPtT9^jy^pm8sZQy3dukB$CF9^o@of5:token8:aoeusnthe1:t2:aa1:y1:re"
             );
         }
 
         #[test]
         fn announce_peer_query() {
             let message = Message::announce_peer_query(
-                &ID::new([
-                    97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53, 54, 55,
-                    56, 57,
-                ]),
-                &ID::new([
-                    109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 49, 50,
-                    51, 52, 53, 54,
-                ]),
+                &ID::new(b"abcdefghij0123456789".to_owned()),
+                &ID::new(b"mnopqrstuvwxyz123456".to_owned()),
                 6881,
                 Bytes::from_static(b"aoeusnth"),
             );
@@ -656,16 +611,13 @@ mod krpc_tests {
         #[test]
         fn announce_peer_resp() {
             let message = Message::announce_peer_resp(
-                &ID::new([
-                    109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 49, 50,
-                    51, 52, 53, 54,
-                ]),
+                &ID::new(b"mnopqrstuvwxyz123456".to_owned()),
                 Bytes::from_static(b"aa"),
             );
 
             assert_eq!(
                 bendy::serde::to_bytes(&message).unwrap(),
-                "d1:rd2:id20:mnopqrstuvwxyz123456e1:t2:aa1:y1:re".as_bytes()
+                b"d1:rd2:id20:mnopqrstuvwxyz123456e1:t2:aa1:y1:re"
             );
         }
 
@@ -681,7 +633,7 @@ mod krpc_tests {
 
             assert_eq!(
                 bendy::serde::to_bytes(&message).unwrap(),
-                "d1:eli201e23:A Generic Error Ocurrede1:t2:aa1:y1:ee".as_bytes()
+                b"d1:eli201e23:A Generic Error Ocurrede1:t2:aa1:y1:ee"
             );
         }
     }
@@ -697,420 +649,288 @@ mod krpc_tests {
 
         #[test]
         fn ping_query() {
-            let raw_data = "d1:ad2:id20:abcdefghij0123456789e1:q4:ping1:t2:aa1:y1:qe".as_bytes();
+            let raw_data = b"d1:ad2:id20:abcdefghij0123456789e1:q4:ping1:t2:aa1:y1:qe";
             let data = bendy::serde::from_bytes::<Message>(raw_data).unwrap();
 
-            assert!(matches!(data, Message::Query { .. }));
-            if let Message::Query {
+            let Message::Query {
                 transaction_id: t,
                 msg_type: y,
                 method_name: q,
                 arguments: a,
-            } = data
-            {
-                assert_eq!(t.into_bytes(), "aa".as_bytes());
-                assert_eq!(y.0, b'q',);
-                assert_eq!(q, "ping");
+            } = data else {
+                panic!("message should be Message::Query");
+            };
 
-                assert!(matches!(a, Arguments::Ping { .. }));
-                if let Arguments::Ping { id } = a {
-                    assert_eq!(
-                        ID::new([
-                            97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53,
-                            54, 55, 56, 57
-                        ]),
-                        id
-                    );
-                } else {
-                    assert!(false);
-                }
-            } else {
-                assert!(false);
-            }
+            assert_eq!(t.as_ref(), b"aa");
+            assert_eq!(y.0, b'q',);
+            assert_eq!(q, "ping");
+
+            let Arguments::Ping { id } = a else {
+                panic!("arguments should be Arguments::Ping");
+            };
+
+            assert_eq!(ID::new(b"abcdefghij0123456789".to_owned()), id);
         }
 
         #[test]
         fn ping_resp() {
-            let raw_data = "d1:rd2:id20:mnopqrstuvwxyz123456e1:t2:aa1:y1:re".as_bytes();
+            let raw_data = b"d1:rd2:id20:mnopqrstuvwxyz123456e1:t2:aa1:y1:re";
             let data = bendy::serde::from_bytes::<Message>(raw_data).unwrap();
 
-            assert!(matches!(data, Message::Response { .. }));
-            if let Message::Response {
+            let Message::Response {
                 transaction_id: t,
                 msg_type: y,
                 response: r,
-            } = data
-            {
-                assert_eq!(t.into_bytes(), "aa".as_bytes());
-                assert_eq!(y.0, b'r');
+            } = data else {
+                panic!("message should be Message::Response");
+            };
 
-                assert!(matches!(r, Response::Ping { .. }));
-                if let Response::Ping { id } = r {
-                    assert_eq!(
-                        ID::new([
-                            109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122,
-                            49, 50, 51, 52, 53, 54
-                        ]),
-                        id
-                    );
-                } else {
-                    assert!(false);
-                }
-            } else {
-                assert!(false);
-            }
+            assert_eq!(t.as_ref(), b"aa");
+            assert_eq!(y.0, b'r');
+
+            let Response::Ping { id } = r else {
+                panic!("arguments should be Response::Ping");
+            };
+
+            assert_eq!(ID::new(b"mnopqrstuvwxyz123456".to_owned()), id);
         }
 
         #[test]
         fn find_nodes_query() {
             let raw_data =
-                "d1:ad2:id20:abcdefghij01234567896:target20:mnopqrstuvwxyz123456e1:q9:find_node1:t2:aa1:y1:qe".as_bytes();
+                b"d1:ad2:id20:abcdefghij01234567896:target20:mnopqrstuvwxyz123456e1:q9:find_node1:t2:aa1:y1:qe";
             let data = bendy::serde::from_bytes::<Message>(raw_data).unwrap();
 
-            assert!(matches!(data, Message::Query { .. }));
-            if let Message::Query {
+            let Message::Query {
                 transaction_id: t,
                 msg_type: y,
                 method_name: q,
                 arguments: a,
-            } = data
-            {
-                assert_eq!(t.into_bytes(), "aa".as_bytes());
-                assert_eq!(y.0, b'q',);
-                assert_eq!(q, "find_node");
+            } = data else {
+                panic!("message should be Message::Query");
+            };
 
-                assert!(matches!(a, Arguments::FindNode { .. }));
-                if let Arguments::FindNode { id, target } = a {
-                    assert_eq!(
-                        ID::new([
-                            97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53,
-                            54, 55, 56, 57
-                        ]),
-                        id
-                    );
+            assert_eq!(t.as_ref(), b"aa");
+            assert_eq!(y.0, b'q',);
+            assert_eq!(q, "find_node");
 
-                    assert_eq!(
-                        ID::new([
-                            109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122,
-                            49, 50, 51, 52, 53, 54
-                        ]),
-                        target
-                    );
-                } else {
-                    assert!(false);
-                }
-            } else {
-                assert!(false);
-            }
+            let Arguments::FindNode { id, target } = a else {
+                panic!("arguments should be Arguments::FindNode");
+            };
+
+            assert_eq!(ID::new(b"mnopqrstuvwxyz123456".to_owned()), target);
+            assert_eq!(ID::new(b"abcdefghij0123456789".to_owned()), id);
         }
 
         #[test]
         fn find_nodes_resp_closest() {
             let raw_data =
-                "d1:rd2:id20:0123456789abcdefghij5:nodes78:rdYAxWC9Zi!A97zKJUbH9HVcgP7Z5cQScmZcC4M2hYKy!JrcYPtT9^jy^pm8sZQy3dukB$CF9^o@ofe1:t2:aa1:y1:re".as_bytes();
+                b"d1:rd2:id20:0123456789abcdefghij5:nodes78:rdYAxWC9Zi!A97zKJUbH9HVcgP7Z5cQScmZcC4M2hYKy!JrcYPtT9^jy^pm8sZQy3dukB$CF9^o@ofe1:t2:aa1:y1:re";
             let data = bendy::serde::from_bytes::<Message>(raw_data).unwrap();
 
-            assert!(matches!(data, Message::Response { .. }));
-            if let Message::Response {
+            let Message::Response {
                 transaction_id: t,
                 msg_type: y,
                 response: r,
-            } = data
-            {
-                assert_eq!(t.into_bytes(), "aa".as_bytes());
-                assert_eq!(y.0, b'r');
+            } = data else {
+                panic!("message should be Message::Response");
+            };
 
-                assert!(matches!(r, Response::FindNode { .. }));
-                if let Response::FindNode { id, nodes } = r {
-                    assert_eq!(
-                        ID::new([
-                            48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 97, 98, 99, 100, 101, 102, 103,
-                            104, 105, 106
-                        ]),
-                        id
-                    );
+            assert_eq!(t.as_ref(), b"aa");
+            assert_eq!(y.0, b'r');
 
-                    assert!(matches!(nodes, Nodes::Closest { .. }));
-                    if let Nodes::Closest(node_list) = nodes {
-                        assert_eq!(node_list.len(), 3);
-                        assert_eq!(
-                            node_list[1].id,
-                            ID::new([
-                                b'7', b'Z', b'5', b'c', b'Q', b'S', b'c', b'm', b'Z', b'c', b'C',
-                                b'4', b'M', b'2', b'h', b'Y', b'K', b'y', b'!', b'J',
-                            ])
-                        );
-                        assert_eq!(Ok(node_list[2].addr), "57.94.111.64:28518".parse())
-                    } else {
-                        assert!(false);
-                    }
-                } else {
-                    assert!(false);
-                }
-            } else {
-                assert!(false);
-            }
+            let Response::FindNode { id, nodes } = r else {
+                panic!("response should be Response::FindNode");
+            };
+
+            assert_eq!(ID::new(b"0123456789abcdefghij".to_owned()), id);
+
+            let Nodes::Closest(node_list) = nodes else {
+                panic!("expected Nodes::Closest");
+            };
+
+            assert_eq!(node_list.len(), 3);
+            assert_eq!(node_list[1].id, ID::new(b"7Z5cQScmZcC4M2hYKy!J".to_owned()));
+            assert_eq!(Ok(node_list[2].addr), "57.94.111.64:28518".parse());
         }
 
         #[test]
         fn find_nodes_resp_exact() {
-            let raw_data = "d1:rd2:id20:0123456789abcdefghij5:nodes26:rdYAxWC9Zi!A97zKJUbH9HVcgPe1:t2:aa1:y1:re".as_bytes();
+            let raw_data = b"d1:rd2:id20:0123456789abcdefghij5:nodes26:rdYAxWC9Zi!A97zKJUbH9HVcgPe1:t2:aa1:y1:re";
             let data = bendy::serde::from_bytes::<Message>(raw_data).unwrap();
 
-            assert!(matches!(data, Message::Response { .. }));
-            if let Message::Response {
+            let Message::Response {
                 transaction_id: t,
                 msg_type: y,
                 response: r,
-            } = data
-            {
-                assert_eq!(t.into_bytes(), "aa".as_bytes());
-                assert_eq!(y.0, b'r');
+            } = data else {
+                panic!("message should be Message::Response");
+            };
 
-                assert!(matches!(r, Response::FindNode { .. }));
-                if let Response::FindNode { id, nodes } = r {
-                    assert_eq!(
-                        ID::new([
-                            48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 97, 98, 99, 100, 101, 102, 103,
-                            104, 105, 106
-                        ]),
-                        id
-                    );
+            assert_eq!(t.as_ref(), b"aa");
+            assert_eq!(y.0, b'r');
 
-                    assert!(matches!(nodes, Nodes::Exact { .. }));
-                    if let Nodes::Exact(node) = nodes {
-                        assert_eq!(
-                            node.id,
-                            ID::new([
-                                b'r', b'd', b'Y', b'A', b'x', b'W', b'C', b'9', b'Z', b'i', b'!',
-                                b'A', b'9', b'7', b'z', b'K', b'J', b'U', b'b', b'H'
-                            ])
-                        );
-                        assert_eq!(node.addr, "57.72.86.99:26448".parse().unwrap())
-                    } else {
-                        assert!(false);
-                    }
-                } else {
-                    assert!(false);
-                }
-            } else {
-                assert!(false);
-            }
+            let Response::FindNode { id, nodes } = r else {
+                panic!("response should be Response::FindNode");
+            };
+            assert_eq!(ID::new(b"0123456789abcdefghij".to_owned()), id);
+
+            let Nodes::Exact(node) = nodes else {
+                    panic!("expected Nodes::Exact");
+                };
+
+            assert_eq!(node.id, ID::new(b"rdYAxWC9Zi!A97zKJUbH".to_owned()));
+            assert_eq!(node.addr, "57.72.86.99:26448".parse().unwrap())
         }
 
         #[test]
         fn get_peers_query() {
             let raw_data =
-                "d1:ad2:id20:abcdefghij01234567899:info_hash20:mnopqrstuvwxyz123456e1:q9:get_peers1:t2:aa1:y1:qe".as_bytes();
+                b"d1:ad2:id20:abcdefghij01234567899:info_hash20:mnopqrstuvwxyz123456e1:q9:get_peers1:t2:aa1:y1:qe";
             let data = bendy::serde::from_bytes::<Message>(raw_data).unwrap();
 
-            assert!(matches!(data, Message::Query { .. }));
-            if let Message::Query {
+            let Message::Query {
                 transaction_id: t,
                 msg_type: y,
                 method_name: q,
                 arguments: a,
-            } = data
-            {
-                assert_eq!(t.into_bytes(), "aa".as_bytes());
-                assert_eq!(y.0, b'q',);
-                assert_eq!(q, "get_peers");
+            } = data else {
+                panic!("message should be Message::Query");
+            };
 
-                assert!(matches!(a, Arguments::GetPeers { .. }));
-                if let Arguments::GetPeers { id, info_hash } = a {
-                    assert_eq!(
-                        ID::new([
-                            97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53,
-                            54, 55, 56, 57
-                        ]),
-                        id
-                    );
+            assert_eq!(t.as_ref(), b"aa");
+            assert_eq!(y.0, b'q',);
+            assert_eq!(q, "get_peers");
 
-                    assert_eq!(
-                        ID::new([
-                            109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122,
-                            49, 50, 51, 52, 53, 54
-                        ]),
-                        info_hash
-                    );
-                } else {
-                    assert!(false);
-                }
-            } else {
-                assert!(false);
-            }
+            let Arguments::GetPeers { id, info_hash } = a else {
+                panic!("arguments should be Arguments::GetPeers");
+            };
+
+            assert_eq!(ID::new(b"abcdefghij0123456789".to_owned()), id);
+            assert_eq!(ID::new(b"mnopqrstuvwxyz123456".to_owned()), info_hash);
         }
 
         #[test]
         fn get_peers_resp_vals() {
             let raw_data =
-                "d1:rd2:id20:abcdefghij01234567895:token8:aoeusnth6:valuesl6:axje.u6:idhtnmee1:t2:aa1:y1:re".as_bytes();
+                b"d1:rd2:id20:abcdefghij01234567895:token8:aoeusnth6:valuesl6:axje.u6:idhtnmee1:t2:aa1:y1:re";
             let data = bendy::serde::from_bytes::<Message>(raw_data).unwrap();
 
-            assert!(matches!(data, Message::Response { .. }));
-            if let Message::Response {
+            let Message::Response {
                 transaction_id: t,
                 msg_type: y,
                 response: r,
-            } = data
-            {
-                assert_eq!(t.into_bytes(), "aa".as_bytes());
-                assert_eq!(y.0, b'r');
+            } = data else {
+                panic!("message should be Message::Response");
+            };
 
-                assert!(matches!(r, Response::GetPeers { .. }));
-                if let Response::GetPeers {
-                    id,
-                    token,
-                    values_or_nodes,
-                } = r
-                {
-                    assert_eq!(
-                        ID::new([
-                            97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53,
-                            54, 55, 56, 57
-                        ]),
-                        id
-                    );
+            assert_eq!(t.as_ref(), b"aa");
+            assert_eq!(y.0, b'r');
 
-                    assert_eq!(token.into_bytes(), "aoeusnth".as_bytes());
+            let Response::GetPeers {
+                id,
+                token,
+                values_or_nodes,
+            } = r else {
+                panic!("response should be Response::GetPeers");
+            };
 
-                    assert!(matches!(values_or_nodes, ValuesOrNodes::Values { .. }));
-                    if let ValuesOrNodes::Values { values } = values_or_nodes {
-                        assert_eq!(values.len(), 2);
+            assert_eq!(ID::new(b"abcdefghij0123456789".to_owned()), id);
+            assert_eq!(token.as_ref(), b"aoeusnth");
 
-                        assert_eq!(
-                            values[0],
-                            Peer::new(SocketAddrV4::new(
-                                Ipv4Addr::new(b'a', b'x', b'j', b'e'),
-                                11893
-                            ))
-                        );
-                        assert_eq!(
-                            values[1],
-                            Peer::new(SocketAddrV4::new(
-                                Ipv4Addr::new(b'i', b'd', b'h', b't'),
-                                28269
-                            ))
-                        );
-                    }
-                } else {
-                    assert!(false);
-                }
-            } else {
-                assert!(false);
-            }
+            let ValuesOrNodes::Values { values } = values_or_nodes else {
+                panic!("expected values (peers)");
+            };
+
+            assert_eq!(values.len(), 2);
+            assert_eq!(
+                values[0],
+                Peer::new(SocketAddrV4::new(
+                    Ipv4Addr::new(b'a', b'x', b'j', b'e'),
+                    11893
+                ))
+            );
+            assert_eq!(
+                values[1],
+                Peer::new(SocketAddrV4::new(
+                    Ipv4Addr::new(b'i', b'd', b'h', b't'),
+                    28269
+                ))
+            );
         }
 
         #[test]
         fn get_peers_resp_nodes() {
-            let raw_data ="d1:rd2:id20:abcdefghij01234567895:nodes78:rdYAxWC9Zi!A97zKJUbH9HVcgP7Z5cQScmZcC4M2hYKy!JrcYPtT9^jy^pm8sZQy3dukB$CF9^o@of5:token8:aoeusnthe1:t2:aa1:y1:re"
-            .as_bytes();
+            let raw_data = b"d1:rd2:id20:abcdefghij01234567895:nodes78:rdYAxWC9Zi!A97zKJUbH9HVcgP7Z5cQScmZcC4M2hYKy!JrcYPtT9^jy^pm8sZQy3dukB$CF9^o@of5:token8:aoeusnthe1:t2:aa1:y1:re"
+            ;
             let data = bendy::serde::from_bytes::<Message>(raw_data).unwrap();
 
-            assert!(matches!(data, Message::Response { .. }));
-            if let Message::Response {
+            let Message::Response {
                 transaction_id: t,
                 msg_type: y,
                 response: r,
-            } = data
-            {
-                assert_eq!(t.into_bytes(), "aa".as_bytes());
-                assert_eq!(y.0, b'r');
+            } = data else {
+                panic!("message should be Message::Response");
+            };
 
-                assert!(matches!(r, Response::GetPeers { .. }));
-                if let Response::GetPeers {
-                    id,
-                    token,
-                    values_or_nodes,
-                } = r
-                {
-                    assert_eq!(
-                        ID::new([
-                            97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53,
-                            54, 55, 56, 57
-                        ]),
-                        id
-                    );
+            assert_eq!(t.as_ref(), b"aa");
+            assert_eq!(y.0, b'r');
 
-                    assert_eq!(token.into_bytes(), "aoeusnth".as_bytes());
+            let Response::GetPeers {
+                id,
+                token,
+                values_or_nodes,
+            } = r else {
+                panic!("response should be Response::GetPeers");
+            };
 
-                    assert!(matches!(values_or_nodes, ValuesOrNodes::Nodes { .. }));
-                    if let ValuesOrNodes::Nodes { nodes } = values_or_nodes {
-                        assert!(matches!(nodes, Nodes::Closest { .. }));
-                        if let Nodes::Closest(node_list) = nodes {
-                            assert_eq!(node_list.len(), 3);
-                            assert_eq!(
-                                node_list[1].id,
-                                ID::new([
-                                    b'7', b'Z', b'5', b'c', b'Q', b'S', b'c', b'm', b'Z', b'c',
-                                    b'C', b'4', b'M', b'2', b'h', b'Y', b'K', b'y', b'!', b'J',
-                                ])
-                            );
-                            assert_eq!(Ok(node_list[2].addr), "57.94.111.64:28518".parse())
-                        } else {
-                            assert!(false);
-                        }
-                    } else {
-                        assert!(false);
-                    }
-                } else {
-                    assert!(false);
-                }
-            } else {
-                assert!(false);
-            }
+            assert_eq!(ID::new(b"abcdefghij0123456789".to_owned()), id);
+            assert_eq!(token.as_ref(), b"aoeusnth");
+
+            let ValuesOrNodes::Nodes { nodes } = values_or_nodes else {
+                panic!("expected nodes");
+            };
+
+            let Nodes::Closest(node_list) = nodes else {
+                panic!("expected list of nodes");
+            };
+
+            assert_eq!(node_list.len(), 3);
+            assert_eq!(node_list[1].id, ID::new(b"7Z5cQScmZcC4M2hYKy!J".to_owned()));
+            assert_eq!(Ok(node_list[2].addr), "57.94.111.64:28518".parse());
         }
 
         #[test]
         fn announce_peer_query() {
-            let raw_data = "d1:ad2:id20:abcdefghij012345678912:implied_porti1e9:info_hash20:mnopqrstuvwxyz1234564:porti6881e5:token8:aoeusnthe1:q13:announce_peer1:t2:aa1:y1:qe".as_bytes();
+            let raw_data = b"d1:ad2:id20:abcdefghij012345678912:implied_porti1e9:info_hash20:mnopqrstuvwxyz1234564:porti6881e5:token8:aoeusnthe1:q13:announce_peer1:t2:aa1:y1:qe";
             let data = bendy::serde::from_bytes::<Message>(raw_data).unwrap();
 
-            assert!(matches!(data, Message::Query { .. }));
-            if let Message::Query {
+            let Message::Query {
                 transaction_id: t,
                 msg_type: y,
                 method_name: q,
                 arguments: a,
-            } = data
-            {
-                assert_eq!(t.into_bytes(), "aa".as_bytes());
-                assert_eq!(y.0, b'q',);
-                assert_eq!(q, "announce_peer");
+            } = data else {
+                panic!("message should be Message::Query");
+            };
 
-                assert!(matches!(a, Arguments::AnnouncePeer { .. }));
-                if let Arguments::AnnouncePeer {
-                    id,
-                    info_hash,
-                    port,
-                    token,
-                } = a
-                {
-                    assert_eq!(
-                        ID::new([
-                            97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 48, 49, 50, 51, 52, 53,
-                            54, 55, 56, 57
-                        ]),
-                        id
-                    );
+            assert_eq!(t.as_ref(), b"aa");
+            assert_eq!(y.0, b'q',);
+            assert_eq!(q, "announce_peer");
 
-                    assert_eq!(
-                        ID::new([
-                            109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122,
-                            49, 50, 51, 52, 53, 54
-                        ]),
-                        info_hash
-                    );
+            let Arguments::AnnouncePeer {
+                id,
+                info_hash,
+                port,
+                token,
+            } = a else {
+                panic!("arguments should be Arguments::Ping");
+            };
 
-                    assert_eq!(token.into_bytes(), "aoeusnth".as_bytes());
-
-                    assert_eq!(port, 6881);
-                } else {
-                    assert!(false);
-                }
-            } else {
-                assert!(false);
-            }
+            assert_eq!(ID::new(b"abcdefghij0123456789".to_owned()), id);
+            assert_eq!(ID::new(b"mnopqrstuvwxyz123456".to_owned()), info_hash);
+            assert_eq!(b"aoeusnth", token.as_ref());
+            assert_eq!(6881, port);
         }
 
         #[test]
@@ -1124,30 +944,28 @@ mod krpc_tests {
 
         #[test]
         fn error() {
-            let raw_data = "d1:eli201e23:A Generic Error Ocurrede1:t2:aa1:y1:ee".as_bytes();
+            let raw_data = b"d1:eli201e23:A Generic Error Ocurrede1:t2:aa1:y1:ee";
             let data = bendy::serde::from_bytes::<Message>(raw_data).unwrap();
 
-            assert!(matches!(data, Message::Error { .. }));
-            if let Message::Error {
+            let Message::Error {
                 transaction_id: t,
                 msg_type: y,
                 error: e,
-            } = data
-            {
-                assert_eq!(t.into_bytes(), "aa".as_bytes());
-                assert_eq!(y.0, b'e');
+            } = data else {
+                panic!("message should be Message::Error");
+            };
 
-                assert!(matches!(e[0], Error::Code { .. }));
-                if let Error::Code(code) = e[0] {
-                    assert_eq!(code, 201);
-                }
+            assert_eq!(t.as_ref(), b"aa");
+            assert_eq!(y.0, b'e');
 
-                assert!(matches!(&e[1], Error::Desc { .. }));
-                if let Error::Desc(desc) = &e[1] {
-                    assert_eq!(desc, "A Generic Error Ocurred");
-                }
-            } else {
-                assert!(false);
+            match e[0] {
+                Error::Code(code) => assert_eq!(code, 201),
+                _ => panic!("first element in error message list should be error code"),
+            }
+
+            match &e[1] {
+                Error::Desc(desc) => assert_eq!(desc, "A Generic Error Ocurred"),
+                _ => panic!("second element in error message list should be error message"),
             }
         }
     }

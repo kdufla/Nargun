@@ -317,7 +317,7 @@ impl TorrentManager {
 
         let new_peers = self
             .peers
-            .return_batch_of_bad_peers_and_get_new_batch(&mut self.inactive_peers, free_peer_slots);
+            .return_batch_of_bad_peers_and_get_new_batch(&self.inactive_peers, free_peer_slots);
 
         self.inactive_peers.clear();
 

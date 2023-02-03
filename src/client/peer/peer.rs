@@ -71,7 +71,7 @@ impl<'de> Deserialize<'de> for Peer {
             }
         }
 
-        Ok(deserializer.deserialize_byte_buf(Visitor {})?)
+        deserializer.deserialize_byte_buf(Visitor {})
     }
 }
 
@@ -91,7 +91,7 @@ impl From<SocketAddr> for Peer {
     fn from(value: SocketAddr) -> Self {
         match value {
             SocketAddr::V4(addr) => Self(addr),
-            SocketAddr::V6(addr) => panic!("no support for IPv6 ({:?})", addr),
+            SocketAddr::V6(addr) => panic!("no support for IPv6 ({addr:?})"),
         }
     }
 }

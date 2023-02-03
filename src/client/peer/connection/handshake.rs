@@ -19,7 +19,7 @@ pub async fn initiate_handshake(
 
     stream.write_all(handshake.as_ref()).await?;
 
-    let mut buf = [0 as u8; HANDSHAKE_LENGTH_FOR_BITTORRENT_PROTOCOL];
+    let mut buf = [0_u8; HANDSHAKE_LENGTH_FOR_BITTORRENT_PROTOCOL];
     let received_byte_cnt = stream.read(&mut buf).await?;
 
     if received_byte_cnt != HANDSHAKE_LENGTH_FOR_BITTORRENT_PROTOCOL {
@@ -95,8 +95,8 @@ mod tests {
             pstr[idx] = *byte;
         }
 
-        for idx in 20..27 {
-            rv[idx] = 0;
+        for reserved in rv[20..27].iter_mut() {
+            *reserved = 0;
         }
         rv[27] = 1;
 
@@ -146,10 +146,7 @@ mod tests {
     #[should_panic]
     fn raw_handshake_with_wrong_size() {
         let raw = serialized_handshake();
-        let _ = Handshake::check_validity(
-            &raw[0..(HANDSHAKE_LENGTH_FOR_BITTORRENT_PROTOCOL as usize - 2)],
-        )
-        .unwrap();
+        Handshake::check_validity(&raw[0..(HANDSHAKE_LENGTH_FOR_BITTORRENT_PROTOCOL - 2)]).unwrap();
     }
 
     #[test]
@@ -157,6 +154,6 @@ mod tests {
     fn raw_handshake_with_wrong_protocol() {
         let mut raw = serialized_handshake();
         raw[17] = b'X';
-        let _ = Handshake::check_validity(raw.as_ref()).unwrap();
+        Handshake::check_validity(raw.as_ref()).unwrap();
     }
 }

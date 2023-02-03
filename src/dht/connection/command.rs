@@ -122,8 +122,8 @@ mod tests {
 
         // transaction_id is going to be different
         assert_eq!(
-            exp_message.to_bytes().unwrap()[..70],
-            message.to_bytes().unwrap()[..70]
+            exp_message.into_bytes().unwrap()[..70],
+            message.into_bytes().unwrap()[..70]
         );
     }
 
@@ -151,6 +151,9 @@ mod tests {
 
         let exp_message = Message::find_nodes_resp(&own_node_id, nodes, tid);
 
-        assert_eq!(exp_message.to_bytes().unwrap(), message.to_bytes().unwrap());
+        assert_eq!(
+            exp_message.into_bytes().unwrap(),
+            message.into_bytes().unwrap()
+        );
     }
 }

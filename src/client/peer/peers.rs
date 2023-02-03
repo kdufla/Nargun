@@ -44,7 +44,7 @@ impl Peers {
     // TODO for later but it's chabuduo for now
     pub fn return_batch_of_bad_peers_and_get_new_batch(
         &mut self,
-        bad_peers: &Vec<(Peer, Status)>,
+        bad_peers: &[(Peer, Status)],
         limit: usize,
     ) -> Vec<Peer> {
         let status_priority_order = [
@@ -64,7 +64,7 @@ impl Peers {
     fn update_locked_data_with_bad_peers(
         &self,
         data: &mut HashMap<Peer, Status>,
-        bad_peers: &Vec<(Peer, Status)>,
+        bad_peers: &[(Peer, Status)],
     ) {
         for (peer, status) in bad_peers.iter().cloned() {
             data.insert(peer, status);
@@ -83,7 +83,7 @@ impl Peers {
             let iter = data
                 .iter_mut()
                 .filter_map(|(peer, status)| {
-                    if discriminant(status) == discriminant(&cur_status) {
+                    if discriminant(status) == discriminant(cur_status) {
                         *status = Status::Active;
                         Some(peer.to_owned())
                     } else {

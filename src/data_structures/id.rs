@@ -10,7 +10,7 @@ use std::{
 
 pub const ID_LEN: usize = 20;
 
-#[derive(Clone, Hash)]
+#[derive(Clone, Hash, PartialEq, Eq)]
 pub struct ID([u8; ID_LEN]);
 
 impl ID {
@@ -170,25 +170,11 @@ impl fmt::Debug for ID {
         for chunk in self.0.chunks(4) {
             rv.push(' ');
             for byte in chunk {
-                rv.push_str(&format!("{:02X?}", byte));
+                rv.push_str(&format!("{byte:02X?}"));
             }
         }
 
         f.write_str(&rv[1..])
-    }
-}
-
-impl Eq for ID {}
-
-impl PartialEq for ID {
-    fn eq(&self, other: &Self) -> bool {
-        for (i, byte) in self.0.iter().enumerate() {
-            if *byte != other.0[i] {
-                return false;
-            }
-        }
-
-        true
     }
 }
 
@@ -214,10 +200,10 @@ impl<'a, 'b> BitXor<&'b ID> for &'a ID {
     type Output = ID;
 
     fn bitxor(self, rhs: &'b ID) -> Self::Output {
-        let mut rv = [0 as u8; ID_LEN];
+        let mut rv = [0u8; ID_LEN];
 
-        for i in 0..self.0.len() {
-            rv[i] = self.0[i] ^ rhs.0[i];
+        for (res, (left, right)) in rv.iter_mut().zip(self.0.iter().zip(rhs.0.iter())) {
+            *res = left ^ right;
         }
 
         ID(rv)
@@ -235,7 +221,7 @@ impl<'a, 'b> Sub<&'b ID> for &'a ID {
 impl From<Vec<u8>> for ID {
     fn from(vec: Vec<u8>) -> Self {
         if vec.len() != ID_LEN {
-            panic!("Vec<u8>::len() must be {}", ID_LEN);
+            panic!("Vec<u8>::len() must be {ID_LEN}");
         }
 
         ID(vec.try_into().unwrap())
@@ -340,7 +326,7 @@ mod tests {
     #[test]
     fn eq() {
         let arr: [u8; ID_LEN] = rand::random();
-        let arr2 = arr.clone();
+        let arr2 = arr;
 
         let id = ID::new(arr);
         let id2 = ID::new(arr2);
@@ -352,7 +338,7 @@ mod tests {
     fn ne() {
         let arr: [u8; ID_LEN] = rand::random();
 
-        let mut arr2 = arr.clone();
+        let mut arr2 = arr;
         arr2[9] = arr2[9].wrapping_add(1);
 
         let id = ID::new(arr);
@@ -366,14 +352,14 @@ mod tests {
         let arr = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
         let id = ID::new(arr);
 
-        let eq_arr = arr.clone();
+        let eq_arr = arr;
         let eq_id = ID::new(eq_arr);
 
-        let mut less_arr = arr.clone();
+        let mut less_arr = arr;
         less_arr[9] -= 1;
         let less_id = ID::new(less_arr);
 
-        let mut greater_arr = arr.clone();
+        let mut greater_arr = arr;
         greater_arr[9] += 1;
         let greater_id = ID::new(greater_arr);
 

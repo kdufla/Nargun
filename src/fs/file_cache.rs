@@ -109,7 +109,7 @@ mod tests {
                 .map(char::from)
                 .collect();
 
-            rv.push(format!("{}/{}", path, name));
+            rv.push(format!("{path}/{name}"));
         }
 
         rv

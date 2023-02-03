@@ -62,6 +62,6 @@ impl<'de> Deserialize<'de> for NoSizeBytes {
             }
         }
 
-        Ok(deserializer.deserialize_byte_buf(Visitor {})?)
+        deserializer.deserialize_byte_buf(Visitor {})
     }
 }

@@ -26,10 +26,10 @@ impl Announce {
         let mut s = self.tracker_url.clone();
 
         s.push_str("?info_hash=");
-        s.push_str(urlencoding::encode_binary(&self.info_hash.as_byte_ref()).as_ref());
+        s.push_str(urlencoding::encode_binary(self.info_hash.as_byte_ref()).as_ref());
 
         s.push_str("&peer_id=");
-        s.push_str(urlencoding::encode_binary(&self.peer_id.as_byte_ref()).as_ref());
+        s.push_str(urlencoding::encode_binary(self.peer_id.as_byte_ref()).as_ref());
 
         s.push_str("&port=");
         s.push_str(&self.port.to_string());

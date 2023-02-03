@@ -1,9 +1,10 @@
 use super::BLOCK_SIZE;
 use crate::data_structures::ID;
 use crate::unsigned_ceil_div;
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use rand::seq::SliceRandom;
 use rand::thread_rng;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
@@ -166,7 +167,7 @@ impl PendingPieces {
             .flatten()
     }
 
-    fn check_block_bounds(&self, block_idx: usize, data: &Vec<u8>) -> Result<()> {
+    fn check_block_bounds(&self, block_idx: usize, data: &[u8]) -> Result<()> {
         if block_idx >= self.blocks_per_piece {
             bail!(
                 "block index ({}) out of bounds ({})",
@@ -183,21 +184,19 @@ impl PendingPieces {
             BLOCK_SIZE
         };
 
-        if block_size > data.len() {
-            bail!(
+        match block_size.cmp(&data.len()) {
+            Ordering::Greater => Err(anyhow!(
                 "block is too small. expected {}, got {}",
                 block_size,
                 data.len()
-            );
-        } else if block_size < data.len() {
-            bail!(
+            )),
+            Ordering::Less => Err(anyhow!(
                 "block is too large. expected {}, got {}",
                 block_size,
                 data.len()
-            );
+            )),
+            Ordering::Equal => Ok(()),
         }
-
-        Ok(())
     }
 
     fn blocking_add_for_valid_block(

@@ -39,7 +39,7 @@ pub enum DhtCommand {
     FetchPeers(ID),
 }
 
-pub fn start_dht(mut peers: Peers, info_hash: ID, mut peer_with_dht: mpsc::Receiver<SocketAddrV4>) {
+pub fn start_dht(peers: Peers, info_hash: ID, peer_with_dht: mpsc::Receiver<SocketAddrV4>) {
     tokio::spawn(async move {
         dht(peers, info_hash, peer_with_dht).await;
     });
@@ -76,7 +76,7 @@ fn setup(
     let (conn_tx, conn_rx) = mpsc::channel(64);
 
     let udp_connection =
-        Connection::new(own_node_id.to_owned(), conn_tx, conn_rx, dht_tx.to_owned());
+        Connection::new(own_node_id, conn_tx, conn_rx, dht_tx.to_owned());
 
     let known_peers: HashSet<Peer> = peers.peer_addresses().into_iter().collect();
     let peer_map = HashMap::from([(info_hash.to_owned(), known_peers)]);
@@ -86,7 +86,7 @@ fn setup(
         periodically_fetch_nodes(dht_tx_clone).await;
     });
 
-    let dht_tx_clone = dht_tx.clone();
+    let dht_tx_clone = dht_tx;
     tokio::spawn(async move {
         periodically_fetch_peers(dht_tx_clone, info_hash).await;
     });
@@ -183,7 +183,7 @@ fn find_node(
     from: SocketAddrV4,
     tid: Bytes,
 ) -> Result<()> {
-    let Some(nodes) = routing_table.find_node(&target) else {
+    let Some(nodes) = routing_table.find_node(target) else {
         return Err(anyhow!("can't find nodes"));
     };
 
@@ -250,7 +250,10 @@ fn get_peers(
 async fn try_ping_node(connection: &Connection, addr: Option<SocketAddrV4>) -> Result<()> {
     debug!("try ping {:?}", addr);
     match addr {
-        Some(addr) => Ok(ping_node(connection, addr).await),
+        Some(addr) => {
+            ping_node(connection, addr).await;
+            Ok(())
+        },
         None => Err(anyhow!("missing addr. hint: connection might be closed")),
     }
 }

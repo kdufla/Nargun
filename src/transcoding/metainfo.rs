@@ -83,7 +83,7 @@ impl Torrent {
         let mut hasher = sha::Sha1::new();
 
         for block in piece_data {
-            hasher.update(&block);
+            hasher.update(block);
         }
 
         ID::new(hasher.finish())
@@ -126,7 +126,7 @@ impl Torrent {
             .iter_mut()
             .for_each(|byte| *byte = 0);
 
-        let piece_hashes: Vec<ID> = data.iter().map(|piece| Self::piece_hash(piece)).collect();
+        let piece_hashes: Vec<ID> = data.iter().map(Self::piece_hash).collect();
 
         let info = Info {
             name: rng
@@ -273,8 +273,8 @@ impl FromBencode for Torrent {
                     }
                 }
                 (b"announce", value) => {
-                    if let Some(tracker_addr) =
-                        TrackerAddr::new(String::decode_bencode_object(value)?).ok()
+                    if let Ok(tracker_addr) =
+                        TrackerAddr::new(String::decode_bencode_object(value)?)
                     {
                         announce.insert(tracker_addr);
                     }
@@ -294,7 +294,7 @@ impl FromBencode for Torrent {
         }
 
         Ok(Torrent {
-            announce: ok_or_missing_field!((!announce.is_empty()).then(|| announce), "announce")?,
+            announce: ok_or_missing_field!((!announce.is_empty()).then_some(announce), "announce")?,
             info: ok_or_missing_field!(info)?,
             info_hash: ok_or_missing_field!(info_hash, "info")?,
         })
@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn multi_parse() {
-        let torrent = Torrent::from_file(&String::from("resources/38WarBreaker.torrent")).unwrap();
+        let torrent = Torrent::from_file(String::from("resources/38WarBreaker.torrent")).unwrap();
 
         assert_eq!(torrent.announce.len(), 11);
         assert!(torrent.announce.contains(&TrackerAddr::Http(
@@ -458,7 +458,7 @@ mod tests {
 
     #[test]
     fn single_parse() {
-        let torrent = Torrent::from_file(&String::from(
+        let torrent = Torrent::from_file(String::from(
             "resources/ubuntu-22.04.1-desktop-amd64.iso.torrent",
         ))
         .unwrap();

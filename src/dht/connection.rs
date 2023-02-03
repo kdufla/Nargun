@@ -59,7 +59,7 @@ impl Connection {
         conn_command_rx: mpsc::Receiver<ConCommand>,
         dht_command_tx: mpsc::Sender<DhtCommand>,
     ) {
-        let sock = UdpSocket::bind(format!("0.0.0.0:{}", LOCAL_PORT_UDP))
+        let sock = UdpSocket::bind(format!("0.0.0.0:{LOCAL_PORT_UDP}"))
             .await
             .unwrap();
 
@@ -99,7 +99,7 @@ impl Connection {
 
             debug!("send {:?}", message);
 
-            let message = match message.to_bytes() {
+            let message = match message.into_bytes() {
                 Ok(message) => message,
                 Err(e) => {
                     error!(?e);
@@ -228,11 +228,11 @@ impl ReceivedMessageHandler {
     }
 
     fn store_node(&self, from: SocketAddrV4, peer_port: u16, info_hash: ID, id: ID) {
-        let mut peer_addr = from.clone();
+        let mut peer_addr = from;
         peer_addr.set_port(peer_port);
         let peer = Peer::new(peer_addr);
 
-        self.dht_send(DhtCommand::NewPeers(vec![peer], info_hash.to_owned()));
+        self.dht_send(DhtCommand::NewPeers(vec![peer], info_hash));
 
         self.dht_send(DhtCommand::NewNodes(Nodes::Exact(Node::new_good(id, from))));
     }
@@ -271,7 +271,7 @@ impl ReceivedMessageHandler {
 
                 match values_or_nodes {
                     ValuesOrNodes::Values { values } => {
-                        self.dht_send(DhtCommand::NewPeers(values, info_hash.to_owned()));
+                        self.dht_send(DhtCommand::NewPeers(values, info_hash));
                     }
                     ValuesOrNodes::Nodes { nodes } => {
                         self.dht_send(DhtCommand::NewNodes(nodes));

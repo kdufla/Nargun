@@ -99,7 +99,7 @@ impl RoutingTable {
             bucket = self.get_bucket(&sibling_id);
         }
 
-        if closest.len() >= 1 {
+        if !closest.is_empty() {
             closest.sort_by(|a, b| a.cmp_by_distance_to_id(b, id));
             debug!("found closest for {:?}, closest: {:?}", id, closest);
             Some(Nodes::Closest(closest))
@@ -169,10 +169,10 @@ impl RoutingTable {
             return;
         }
 
-        self.split(id, addr, own_id, None);
+        self.split(id, addr, None);
     }
 
-    fn split(&mut self, id: ID, addr: SocketAddrV4, own_id: ID, bucket_idx: Option<usize>) {
+    fn split(&mut self, id: ID, addr: SocketAddrV4, bucket_idx: Option<usize>) {
         let bucket_idx = match bucket_idx {
             Some(idx) => idx,
             None => self.find_bucket_idx_by_id(&id),
@@ -197,7 +197,7 @@ impl RoutingTable {
             return;
         }
 
-        self.split(id, addr, own_id, Some(cur_idx))
+        self.split(id, addr, Some(cur_idx))
     }
 
     fn get_bucket_at(&self, i: usize) -> Option<&Bucket> {
@@ -242,15 +242,13 @@ impl Bucket {
         let mut cur_left_idx = 0;
         let mut cur_right_idx = 0;
 
-        for node in &self.data {
-            if let Some(node) = node {
-                if node.id.get_bit(self.depth) {
-                    right.data[cur_right_idx] = Some(node.to_owned());
-                    cur_right_idx += 1;
-                } else {
-                    left.data[cur_left_idx] = Some(node.to_owned());
-                    cur_left_idx += 1;
-                }
+        for node in self.data.iter().flatten() {
+            if node.id.get_bit(self.depth) {
+                right.data[cur_right_idx] = Some(node.to_owned());
+                cur_right_idx += 1;
+            } else {
+                left.data[cur_left_idx] = Some(node.to_owned());
+                cur_left_idx += 1;
             }
         }
 
@@ -264,14 +262,14 @@ impl Bucket {
     fn get_node(&self, id: &ID) -> Option<&Node> {
         self.data
             .iter()
-            .find(|node| Node::is_some_with_id(node, &id).is_some())?
+            .find(|node| Node::is_some_with_id(node, id).is_some())?
             .as_ref()
     }
 
     fn get_node_mut(&mut self, id: &ID) -> Option<&mut Node> {
         self.data
             .iter_mut()
-            .find(|node| Node::is_some_with_id(node, &id).is_some())?
+            .find(|node| Node::is_some_with_id(node, id).is_some())?
             .as_mut()
     }
 
@@ -532,7 +530,7 @@ mod routing_table_tests {
 
         rt.insert_good(id.to_owned(), addr.to_owned());
         rt.insert_good(id.to_owned(), addr.to_owned());
-        rt.insert_good(id.to_owned(), addr.to_owned());
+        rt.insert_good(id, addr.to_owned());
 
         check_node_counts_for_leaf_at_idx(&rt, 0, 1, 0, 7);
     }
