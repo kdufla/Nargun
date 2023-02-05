@@ -1,4 +1,5 @@
-use super::{BlockAddress, BLOCK_SIZE};
+use super::BLOCK_SIZE;
+use crate::client::peer::BlockAddress;
 use crate::data_structures::NoSizeBytes;
 use anyhow::{bail, Result};
 use bincode::Options;
@@ -253,7 +254,7 @@ mod tests {
     use super::{Message, Piece, Request};
     use crate::data_structures::NoSizeBytes;
     use bytes::Bytes;
-    use std::mem::transmute;
+    
 
     fn long_buf_from_message_slice(raw_message: &[u8]) -> [u8; 1 << 6] {
         let mut buf = [0u8; 1 << 6];

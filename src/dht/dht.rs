@@ -75,8 +75,7 @@ fn setup(
     let (dht_tx, dht_rx) = mpsc::channel(64);
     let (conn_tx, conn_rx) = mpsc::channel(64);
 
-    let udp_connection =
-        Connection::new(own_node_id, conn_tx, conn_rx, dht_tx.to_owned());
+    let udp_connection = Connection::new(own_node_id, conn_tx, conn_rx, dht_tx.to_owned());
 
     let known_peers: HashSet<Peer> = peers.peer_addresses().into_iter().collect();
     let peer_map = HashMap::from([(info_hash.to_owned(), known_peers)]);
@@ -219,7 +218,7 @@ fn get_peers(
                     .iter()
                     .choose_multiple(&mut rng, MTU / COMPACT_PEER_LEN)
                     .iter()
-                    .map(|p| (*p).clone())
+                    .map(|p| **p)
                     .collect(),
             }
         }
@@ -253,7 +252,7 @@ async fn try_ping_node(connection: &Connection, addr: Option<SocketAddrV4>) -> R
         Some(addr) => {
             ping_node(connection, addr).await;
             Ok(())
-        },
+        }
         None => Err(anyhow!("missing addr. hint: connection might be closed")),
     }
 }

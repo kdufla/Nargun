@@ -24,15 +24,16 @@ pub fn start_client(
     number_of_pieces: usize,
     peers: Peers,
     dht_tx: mpsc::Sender<ConnectionMessage>, // TODO connection is small enough, dht doesn't need to know about whole peer message, this must be a sockaddr
-    torrent: &Torrent,
+    torrent: Torrent,
     peer_id: &ID,
     pieces_downloaded: Arc<AtomicU64>,
     tx: &broadcast::Sender<bool>,
     tcp_port: u16,
 ) {
-    tracker::spawn_tracker_managers(torrent, peer_id, &peers, pieces_downloaded, tx, tcp_port);
+    tracker::spawn_tracker_managers(&torrent, peer_id, &peers, pieces_downloaded, tx, tcp_port);
 
     manager::TorrentManager::spawn(
+        torrent,
         client_id,
         info_hash,
         piece_length,

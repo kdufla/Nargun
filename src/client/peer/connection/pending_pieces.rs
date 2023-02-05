@@ -1,5 +1,7 @@
 use super::BLOCK_SIZE;
-use crate::data_structures::ID;
+use crate::client::peer::BlockAddress;
+use crate::client::Peer;
+
 use crate::unsigned_ceil_div;
 use anyhow::{anyhow, bail, Result};
 use rand::seq::SliceRandom;
@@ -8,23 +10,18 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
-use tokio::sync::mpsc;
+
 use tokio::time::Instant;
+use tracing::error;
 
 const MAX_PIECES_DOWNLOADING: usize = 10;
 const MAINLINE_TCP_REQUEST_TIMEOUT_SECS: u64 = 7;
-
-#[derive(Debug)]
-pub struct BlockAddress {
-    pub piece_idx: usize,
-    pub block_idx: usize,
-}
 
 #[derive(Clone)]
 pub struct PendingPieces {
     piece_length: usize,
     blocks_per_piece: usize,
-    finish_callback: mpsc::Sender<FinishedPiece>,
+    copy_owner: Option<Peer>,
     data: Arc<StdMutex<HashMap<usize, Piece>>>,
 }
 
@@ -43,7 +40,7 @@ struct Piece {
 
 #[derive(Clone)]
 struct PendingBlockDesc {
-    target: ID,
+    target: Peer,
     time_sent: Instant,
 }
 
@@ -54,21 +51,26 @@ enum Block {
     Downloaded(Vec<u8>),
 }
 
-enum Add {
+pub enum AddBlockRes {
+    Failed,
     Added,
-    AddedLast(Piece),
+    AddedLast(FinishedPiece),
 }
 
 impl PendingPieces {
-    pub fn new(piece_length: usize, finish_callback: mpsc::Sender<FinishedPiece>) -> Self {
+    pub fn new(piece_length: usize) -> Self {
         Self {
             piece_length,
             blocks_per_piece: unsigned_ceil_div!(piece_length, BLOCK_SIZE),
-            finish_callback,
+            copy_owner: None,
             data: Arc::new(StdMutex::new(HashMap::with_capacity(
                 MAX_PIECES_DOWNLOADING,
             ))),
         }
+    }
+
+    pub fn set_owner_peer(&mut self, owner: Peer) {
+        self.copy_owner = Some(owner);
     }
 
     pub fn add_piece(&mut self, idx: usize) -> Result<()> {
@@ -92,28 +94,37 @@ impl PendingPieces {
         piece_idx: usize,
         block_idx: usize,
         block_data: Vec<u8>,
-        from: &ID,
-    ) -> Result<()> {
-        self.check_block_bounds(block_idx, &block_data)?;
+    ) -> AddBlockRes {
+        if let Err(e) = self.check_block_bounds(block_idx, &block_data) {
+            error!(?e);
+            return AddBlockRes::Failed;
+        };
 
-        if let Add::AddedLast(finished_piece) =
-            self.blocking_add_for_valid_block(piece_idx, block_idx, block_data, from)?
-        {
-            let tx = self.finish_callback.clone();
-            tokio::spawn(async move {
-                let _ = tx
-                    .send(FinishedPiece {
-                        data: finished_piece.data.into_iter().map(|b| b.into()).collect(),
-                        idx: piece_idx,
-                    })
-                    .await;
-            });
+        let mut data = self.data.lock().unwrap();
+
+        let Some(piece) = data.get_mut(&piece_idx) else {
+            error!("trying to store a block of unknown piece {}", piece_idx);
+            return AddBlockRes::Failed;
+        };
+
+        let block = &mut piece.data[block_idx];
+
+        *block = Block::Downloaded(block_data);
+        piece.downloaded += 1;
+        piece.pending -= 1;
+
+        if self.blocks_per_piece == piece.downloaded {
+            let finished_piece = data.remove(&piece_idx).unwrap();
+            AddBlockRes::AddedLast(FinishedPiece {
+                data: finished_piece.data.into_iter().map(|b| b.into()).collect(),
+                idx: piece_idx,
+            })
+        } else {
+            AddBlockRes::Added
         }
-
-        Ok(())
     }
 
-    pub fn cancel_pending(&mut self, from: &ID) {
+    pub fn cancel_pending(&mut self, from: &Peer) {
         let mut data = self.data.lock().unwrap();
 
         for (_, piece) in data.iter_mut() {
@@ -125,44 +136,54 @@ impl PendingPieces {
         }
     }
 
-    pub fn take_not_good_blocks(&self, pieces: &[usize], n: usize) -> Vec<BlockAddress> {
-        let mut pieces = pieces.to_owned();
+    pub fn take_not_good_blocks(&self, mut pieces: Vec<usize>, block_buf: &mut Vec<BlockAddress>) {
         let mut rng = thread_rng();
         pieces.shuffle(&mut rng);
 
-        let data = self.data.lock().unwrap();
+        let filters = [
+            |block: &Block| block.is(&Block::Unbegun),
+            |block: &Block| block.is_expired_pending(),
+        ];
 
-        let iter_over_unbegun =
-            Self::filtered_iter_over_blocks(&pieces, &data, |block| block.is(&Block::Unbegun));
+        let mut data = self.data.lock().unwrap();
 
-        let iter_over_expired =
-            Self::filtered_iter_over_blocks(&pieces, &data, |block| block.is_expired_pending());
+        let now = Instant::now();
 
-        iter_over_unbegun.chain(iter_over_expired).take(n).collect()
+        for filter in filters {
+            for (block, block_address) in
+                Self::filtered_iter_over_blocks(&pieces, &mut data, filter)
+            {
+                *block = Block::Pending(PendingBlockDesc {
+                    target: self.copy_owner.unwrap(),
+                    time_sent: now,
+                });
+
+                block_buf.push(block_address);
+            }
+
+            if block_buf.capacity() == block_buf.len() {
+                break;
+            }
+        }
     }
 
-    // for each piece form the list gets a list of blocks that passes provided closure
-    // just read it..  it looks way more complicated than it actually is
     fn filtered_iter_over_blocks<'a>(
         piece_indexes: &'a [usize],
-        data: &'a HashMap<usize, Piece>,
-        filter_closure: fn(&'a Block) -> bool,
-    ) -> impl Iterator<Item = BlockAddress> + 'a {
-        piece_indexes
-            .iter()
-            .filter_map(move |&piece_idx| {
-                data.get(&piece_idx).map(|piece| {
+        data: &'a mut HashMap<usize, Piece>,
+        filter_closure: fn(&Block) -> bool,
+    ) -> impl Iterator<Item = (&'a mut Block, BlockAddress)> + 'a {
+        data.iter_mut()
+            .filter_map(move |(piece_idx, piece)| {
+                piece_indexes.contains(piece_idx).then_some(
                     piece
                         .data
-                        .iter()
+                        .iter_mut()
                         .enumerate()
                         .filter_map(move |(block_idx, block)| {
-                            filter_closure(block).then_some(BlockAddress {
-                                piece_idx,
-                                block_idx,
-                            })
-                        })
-                })
+                            filter_closure(block)
+                                .then_some((block, BlockAddress::new(*piece_idx, block_idx)))
+                        }),
+                )
             })
             .flatten()
     }
@@ -197,37 +218,6 @@ impl PendingPieces {
             )),
             Ordering::Equal => Ok(()),
         }
-    }
-
-    fn blocking_add_for_valid_block(
-        &mut self,
-        piece_idx: usize,
-        block_idx: usize,
-        block_data: Vec<u8>,
-        from: &ID,
-    ) -> Result<Add> {
-        let mut data = self.data.lock().unwrap();
-
-        let Some(piece) = data.get_mut(&piece_idx) else {
-                bail!("piece {} not pending",piece_idx);
-            };
-
-        let block = &mut piece.data[block_idx];
-
-        if !block.is_expected_from(from) {
-            bail!("unknown source");
-        }
-
-        *block = Block::Downloaded(block_data);
-        piece.downloaded += 1;
-        piece.pending -= 1;
-
-        Ok(if self.blocks_per_piece == piece.downloaded {
-            let finished_piece = data.remove(&piece_idx).unwrap();
-            Add::AddedLast(finished_piece)
-        } else {
-            Add::Added
-        })
     }
 }
 
@@ -272,7 +262,7 @@ impl Block {
         description.time_sent.elapsed() < Duration::from_secs(MAINLINE_TCP_REQUEST_TIMEOUT_SECS)
     }
 
-    fn is_expected_from(&self, target: &ID) -> bool {
+    fn is_expected_from(&self, target: &Peer) -> bool {
         let Self::Pending(description) = self else {
             return false;
         };

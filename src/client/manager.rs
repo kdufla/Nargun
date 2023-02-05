@@ -1,9 +1,10 @@
 use super::peer::connection::{
     ConMessageType, Connection, ConnectionMessage, FinishedPiece, ManagerChannels, PendingPieces,
 };
-use super::peer::manage_peer;
+use super::peer::{manage_peer, PeerManagerCommand};
 use super::peer::{Peer, Peers, Status as PeerStatus};
 use crate::data_structures::{Bitmap, ID};
+use crate::transcoding::metainfo::Torrent;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -18,9 +19,8 @@ const MAX_PEER_PER_PIECE: usize = 3;
 // TODO ideally this must have its own Torrent with its peers and shit. Currently, my dht assumes just one torrent.
 // I know what you're thinking, future G, and no - I can't. Port message needs to know that there's a dht server running.
 // I can't put a port in dht if I don't, at least partially, assume the same. I'll try my best to make your life easy.
-// Good job, if you're actually reading this. This must work well enough to not use Tixati and spend time making this better.
-// Spending your free time on useless shit like this is the kind of Donski behaviour your ✨ Year of Coding ✨ needs.
 pub struct TorrentManager {
+    metainfo: Torrent,
     active_peers: HashMap<Peer, PeerInfo>,
     inactive_peers: Vec<(Peer, PeerStatus)>,
     pending_pieces: PendingPieces,
@@ -32,6 +32,7 @@ pub struct TorrentManager {
     active_pieces: Bitmap,
     frequency_map: Vec<u16>,
     assigned_peer_count: Vec<u8>,
+    finished_piece_tx: mpsc::Sender<FinishedPiece>,
     dht_tx: mpsc::Sender<ConnectionMessage>,
     self_tx: mpsc::Sender<ConnectionMessage>,
 }
@@ -40,11 +41,12 @@ struct PeerInfo {
     choking: bool,
     haves: Bitmap,
     working: Bitmap,
-    manager_tx: mpsc::Sender<usize>,
+    manager_tx: mpsc::Sender<PeerManagerCommand>,
 }
 
 impl TorrentManager {
     pub fn spawn(
+        metainfo: Torrent,
         client_id: ID,
         info_hash: ID,
         piece_length: usize,
@@ -57,13 +59,15 @@ impl TorrentManager {
 
         tokio::spawn(async move {
             Self {
+                metainfo,
                 active_peers: HashMap::with_capacity(MAX_ACTIVE_PEERS),
                 inactive_peers: Vec::with_capacity(MAX_ACTIVE_PEERS),
-                pending_pieces: PendingPieces::new(piece_length, finished_piece_tx),
+                pending_pieces: PendingPieces::new(piece_length),
                 peers,
                 client_id,
                 info_hash,
                 piece_length,
+                finished_piece_tx,
                 local_data: Bitmap::new(number_of_pieces),
                 active_pieces: Bitmap::new(number_of_pieces),
                 frequency_map: vec![0; number_of_pieces],
@@ -95,15 +99,15 @@ impl TorrentManager {
 
     async fn download_new_pieces(&mut self) {
         for _ in 0..(MAX_ACTIVE_PIECES - self.active_pieces.weight()) {
-            let Some((peer, piece_idx)) = self.select_piece() else {
+            let Some((peer, piece_idx, piece_hash)) = self.select_piece() else {
                 break;
             };
 
-            self.download_new_piece(&peer, piece_idx).await;
+            self.download_new_piece(&peer, piece_idx, piece_hash).await;
         }
     }
 
-    async fn download_new_piece(&mut self, peer: &Peer, piece_idx: usize) {
+    async fn download_new_piece(&mut self, peer: &Peer, piece_idx: usize, piece_hash: ID) {
         let Some(peer_info) = self.active_peers.get_mut(peer) else {
             warn!("this should not get called on non-active peer");
             return;
@@ -112,7 +116,11 @@ impl TorrentManager {
         // TODO this will fail because MAX_ACTIVE_PIECES and MAX_PIECES_DOWNLOADING are separate
         let _ = self.pending_pieces.add_piece(piece_idx);
 
-        if let Err(e) = peer_info.manager_tx.send(piece_idx).await {
+        if let Err(e) = peer_info
+            .manager_tx
+            .send(PeerManagerCommand::StartPiece((piece_hash, piece_idx)))
+            .await
+        {
             error!("peer({:?}) manager is dead. e={:?}", peer, e);
         }
 
@@ -138,8 +146,14 @@ impl TorrentManager {
             .count()
     }
 
-    fn select_piece(&mut self) -> Option<(Peer, usize)> {
-        self.sequential_select_piece()
+    fn select_piece(&mut self) -> Option<(Peer, usize, ID)> {
+        self.sequential_select_piece().map(|(peer, piece_idx)| {
+            (
+                peer,
+                piece_idx,
+                self.metainfo.info.pieces.get(piece_idx).unwrap().to_owned(),
+            )
+        })
     }
 
     // fn rarest_first_select_piece(&self) -> Option<(&Peer, usize)> {}
@@ -328,7 +342,7 @@ impl TorrentManager {
             let (peer_manager_tx, peer_manager_rx) = mpsc::channel(1 << 4);
 
             new_peer_data_for_this_task.push((
-                peer.clone(),
+                peer,
                 PeerInfo {
                     haves: Bitmap::new(self.local_data.len()),
                     working: Bitmap::new(self.local_data.len()),
@@ -345,8 +359,8 @@ impl TorrentManager {
         self.active_peers.extend(new_peer_data_for_this_task);
     }
 
-    fn spawn_peers(&self, peers: Vec<(Peer, mpsc::Receiver<usize>)>) {
-        for (peer, peer_manager_rx) in peers {
+    fn spawn_peers(&self, peers: Vec<(Peer, mpsc::Receiver<PeerManagerCommand>)>) {
+        for (peer, new_piece_rx) in peers {
             let (down_tx, download_manager_rx) = mpsc::channel(1 << 5);
 
             let managers = ManagerChannels {
@@ -364,13 +378,18 @@ impl TorrentManager {
                 managers.to_owned(),
             );
 
-            let pending_pieces = self.pending_pieces.clone();
+            let mut pending_pieces = self.pending_pieces.clone();
+            pending_pieces.set_owner_peer(peer);
+
+            let finished_piece_tx = self.finished_piece_tx.clone();
+
             tokio::spawn(async move {
                 manage_peer(
-                    peer_manager_rx,
-                    pending_pieces,
-                    connection,
+                    new_piece_rx,
                     download_manager_rx,
+                    pending_pieces,
+                    finished_piece_tx,
+                    connection,
                 )
                 .await;
             });

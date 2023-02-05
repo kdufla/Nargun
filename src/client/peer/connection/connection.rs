@@ -130,7 +130,7 @@ struct MessageSender {
 impl MessageSender {
     async fn send(&self, message: ConMessageType) {
         let m = ConnectionMessage {
-            peer: self.peer.clone(),
+            peer: self.peer,
             message,
         };
 

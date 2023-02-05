@@ -151,7 +151,7 @@ mod tests {
         assert_eq!(&Status::Active, data.get(&unknown_peers[0]).unwrap());
         assert_eq!(&Status::Active, data.get(&unknown_peers[1]).unwrap());
 
-        let return_peers = vec![(unknown_peers[0].clone(), Status::UnableToConnect)];
+        let return_peers = vec![(unknown_peers[0], Status::UnableToConnect)];
 
         drop(data);
         let unknown_peers_2 = peers.return_batch_of_bad_peers_and_get_new_batch(&return_peers, 100);

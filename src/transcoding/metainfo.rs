@@ -79,7 +79,7 @@ impl Torrent {
         self.info.pieces.len()
     }
 
-    fn piece_hash(piece_data: &Vec<Vec<u8>>) -> ID {
+    pub fn piece_hash(piece_data: &Vec<Vec<u8>>) -> ID {
         let mut hasher = sha::Sha1::new();
 
         for block in piece_data {

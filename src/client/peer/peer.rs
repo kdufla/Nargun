@@ -5,7 +5,7 @@ use std::net::{SocketAddr, SocketAddrV4};
 
 pub const COMPACT_PEER_LEN: usize = COMPACT_SOCKADDR_LEN;
 
-#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub struct Peer(SocketAddrV4);
 
 impl Peer {
