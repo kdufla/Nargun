@@ -7,8 +7,13 @@ use crate::{
     transcoding::metainfo::Torrent,
 };
 use anyhow::{bail, Result};
-use std::collections::HashMap;
-use tokio::{select, sync::mpsc};
+use std::{collections::HashMap, time::Duration};
+use tokio::{
+    select,
+    sync::mpsc,
+    time::{sleep, Instant},
+};
+use tracing::warn;
 
 // TODO unwraps, no-text bails... just read/modify all of it
 
@@ -82,9 +87,14 @@ pub async fn manage_peer(
             .iter_mut()
             .filter(|block| block.status == BlockStatus::Queued)
         {
-            connection
+            if let Err(e) = connection
                 .send(Message::Request((*queued_block).into()))
-                .await;
+                .await
+            {
+                warn!(?e);
+            }
+
+            sleep(Duration::from_secs(10)).await;
 
             queued_block.status = BlockStatus::Requested;
         }
@@ -102,18 +112,18 @@ async fn foo(
 ) -> Result<()> {
     if let ConMessageType::Piece(piece) = message.message {
         if piece.begin as usize % BLOCK_SIZE > 0 {
-            bail!("");
+            bail!("piece.begin as usize % BLOCK_SIZE > 0");
         }
 
         let piece_idx = piece.index as usize;
         let Some(piece_hash) = current_pieces.get(&piece_idx) else {
-            bail!("");
+            bail!("current_pieces.get(&piece_idx) == None");
         };
 
         let block_idx = piece.begin as usize / BLOCK_SIZE;
 
         let Some(idx) = current_blocks.iter().position(|block_addr| block_addr.block_idx == block_idx ) else {
-            bail!("");
+            bail!("current_blocks.iter().position(|block_addr| block_addr.block_idx == block_idx ) == None");
         };
         let mut removed_block_addr = current_blocks.remove(idx);
 
@@ -126,7 +136,7 @@ async fn foo(
             AddBlockRes::AddedLast(finished_piece) => {
                 if Torrent::piece_hash(&finished_piece.data) != *piece_hash {
                     pending_pieces.add_piece(piece_idx);
-                    bail!("");
+                    bail!("Torrent::piece_hash(&finished_piece.data) != *piece_hash");
                 }
 
                 finished_piece_tx.send(finished_piece).await;

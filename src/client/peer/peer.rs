@@ -75,6 +75,12 @@ impl<'de> Deserialize<'de> for Peer {
     }
 }
 
+impl ToString for Peer {
+    fn to_string(&self) -> String {
+        self.0.to_string()
+    }
+}
+
 impl From<&Peer> for Peer {
     fn from(value: &Peer) -> Self {
         value.to_owned()

@@ -8,14 +8,17 @@ mod macros;
 mod transcoding;
 
 use anyhow::Result;
-use client::Peers;
+use client::{start_client, Peers};
 use core::time;
 use data_structures::ID;
 use dht::start_dht;
 // use fs::build_dir_tree;
-use std::net::SocketAddrV4;
+use std::{
+    net::SocketAddrV4,
+    sync::{atomic::AtomicU64, Arc},
+};
 use tokio::{
-    sync::mpsc,
+    sync::{broadcast, mpsc},
     time::{sleep, Instant},
 };
 use tracing::{debug, error, info, warn};
@@ -44,7 +47,7 @@ async fn main() -> Result<()> {
         // add the console layer to the subscriber
         .with(console_layer)
         // add other layers...
-        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::fmt::layer().with_line_number(true))
         // .with(...)
         .init();
 
@@ -54,11 +57,25 @@ async fn main() -> Result<()> {
     // console_subscriber::init();
 
     // env::set_var("RUST_BACKTRACE", "1");
-    // let peer_id = ID::new(rand::random());
+    let client_id = ID::new(rand::random());
 
     let config = config::Config::new();
     let torrent = Torrent::from_file(&config.file).unwrap();
+    let peers = Peers::new(&torrent.info_hash);
+    let (tcp_port, udp_port) = gateway_device::open_any_port()?;
+    let (dht_tx, dht_rx) = mpsc::channel(1 << 5);
+    let (that_unknown_tx, _rx) = broadcast::channel(1 << 5);
+    let pieces_downloaded = Arc::new(AtomicU64::new(0));
 
+    start_client(
+        client_id,
+        peers,
+        dht_tx,
+        torrent,
+        pieces_downloaded,
+        &that_unknown_tx,
+        tcp_port,
+    );
     // let _ = fs::FS::new("base_dir".to_string(), &torrent.info).await;
 
     // if let Mode::Multi { files } = &torrent.info.mode {
@@ -71,7 +88,6 @@ async fn main() -> Result<()> {
 
     // debug!(?directories);
 
-    // let (tcp_port, udp_port) = gateway_device::open_any_port()?;
     // info!(?tcp_port, ?udp_port);
 
     // let addr: SocketAddrV4 = "44.242.152.222:8850".parse().unwrap();

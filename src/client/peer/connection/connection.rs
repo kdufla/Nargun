@@ -1,5 +1,8 @@
+use std::mem::discriminant;
+
 use super::handshake::initiate_handshake;
 use super::message::{Message, Piece, Request};
+use crate::client::peer::connection::BYTES_IN_LEN;
 use crate::client::Peer;
 use crate::data_structures::NoSizeBytes;
 use crate::data_structures::ID;
@@ -9,7 +12,8 @@ use tokio::net::TcpStream;
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio::time::{interval, Duration};
-use tracing::{error, warn};
+use tracing::log::trace;
+use tracing::{debug, debug_span, error, instrument, trace_span, warn, Span};
 
 pub const BLOCK_SIZE: usize = 1 << 14;
 pub const DESCRIPTIVE_DATA_SIZE: usize = 1 << 7;
@@ -41,6 +45,7 @@ impl Connection {
     }
 }
 
+#[instrument(skip_all, fields(peer = peer.to_string()))]
 async fn manage_tcp(
     client_id: ID,
     peer: Peer,
@@ -87,6 +92,8 @@ async fn manager_sender(
                 return;
             };
 
+        trace!("send {:?}", message);
+
         if let Err(e) = stream.write_all(message.into_bytes().as_ref()).await {
             error!(?e);
         }
@@ -95,29 +102,57 @@ async fn manager_sender(
 
 async fn manager_receiver(mut stream: ReadHalf<&mut TcpStream>, manager_messenger: &MessageSender) {
     let mut buf = vec![0u8; MAX_MESSAGE_BYTES];
+    let mut data_start = 0;
+    let mut data_end = 0;
+
     loop {
-        let Some(message) = read_message(&mut buf,&mut stream).await else{
-            continue;
+        let tmp = match stream.read(&mut buf[data_end..]).await {
+            Ok(len) => len,
+            Err(e) => {
+                error!(?e);
+                return;
+            }
         };
 
-        manager_messenger.send(message.into()).await;
-    }
-}
+        // TODO remove these comments. for now, we might still need detailed logs here
 
-async fn read_message(buf: &mut [u8], stream: &mut ReadHalf<&mut TcpStream>) -> Option<Message> {
-    let message_len = match stream.read(buf).await {
-        Ok(len) => len,
-        Err(e) => {
-            error!(?e);
-            return None;
-        }
-    };
+        // debug!("read {tmp} bytes");
+        data_end += tmp;
 
-    match Message::from_buf(buf, message_len) {
-        Ok(m) => Some(m),
-        Err(e) => {
-            error!(?e);
-            None
+        let mut data_len = data_end - data_start;
+
+        // debug!("cur data len {:?} ({}..{})", data_len, data_start, data_end);
+
+        while data_len >= BYTES_IN_LEN {
+            let message_len = Message::len(&buf[data_start..]) + BYTES_IN_LEN;
+            // debug!(message_len);
+
+            // if data_len > 128 {
+            //     debug!("[start..+64]{:?}", &buf[data_start..data_start + 64]);
+            //     debug!("[-64..end]{:?}", &buf[data_end - 64..data_end]);
+            // } else {
+            //     debug!("{:?}", &buf[data_start..data_start + message_len]);
+            // }
+
+            if message_len <= data_len {
+                if let Some(message) = Message::from_buf(&buf) {
+                    trace!("received msg {:?}", discriminant(&message));
+                    manager_messenger.send(message.into()).await;
+                };
+
+                data_start += message_len;
+                data_len -= message_len;
+
+                // debug!("left data {}..{}", data_start, data_end);
+                if data_end > data_start {
+                    buf.copy_within(data_start..data_end, 0);
+                }
+
+                data_end -= data_start;
+                data_start = 0;
+            } else {
+                break;
+            }
         }
     }
 }

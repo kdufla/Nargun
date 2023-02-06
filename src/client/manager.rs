@@ -26,8 +26,6 @@ pub struct TorrentManager {
     pending_pieces: PendingPieces,
     peers: Peers,
     client_id: ID,
-    info_hash: ID,
-    piece_length: usize,
     local_data: Bitmap,
     active_pieces: Bitmap,
     frequency_map: Vec<u16>,
@@ -48,9 +46,6 @@ impl TorrentManager {
     pub fn spawn(
         metainfo: Torrent,
         client_id: ID,
-        info_hash: ID,
-        piece_length: usize,
-        number_of_pieces: usize,
         peers: Peers,
         dht_tx: mpsc::Sender<ConnectionMessage>,
     ) {
@@ -59,19 +54,17 @@ impl TorrentManager {
 
         tokio::spawn(async move {
             Self {
-                metainfo,
+                pending_pieces: PendingPieces::new(metainfo.info.piece_length as usize),
                 active_peers: HashMap::with_capacity(MAX_ACTIVE_PEERS),
                 inactive_peers: Vec::with_capacity(MAX_ACTIVE_PEERS),
-                pending_pieces: PendingPieces::new(piece_length),
                 peers,
                 client_id,
-                info_hash,
-                piece_length,
                 finished_piece_tx,
-                local_data: Bitmap::new(number_of_pieces),
-                active_pieces: Bitmap::new(number_of_pieces),
-                frequency_map: vec![0; number_of_pieces],
-                assigned_peer_count: vec![0; number_of_pieces],
+                local_data: Bitmap::new(metainfo.count_pieces()),
+                active_pieces: Bitmap::new(metainfo.count_pieces()),
+                frequency_map: vec![0; metainfo.count_pieces()],
+                assigned_peer_count: vec![0; metainfo.count_pieces()],
+                metainfo,
                 dht_tx,
                 self_tx,
             }
@@ -92,7 +85,7 @@ impl TorrentManager {
             select! {
                 _ = interval.tick() => { self.refresh_peer_list(); self.download_new_pieces().await; },
                 command = self_rx.recv() => { self.handle_command_tmp(command) },
-                finished_piece = finished_piece_rx.recv() => { debug!(?finished_piece) },
+                finished_piece = finished_piece_rx.recv() => { debug!("finished {}", finished_piece.unwrap().idx) },
             };
         }
     }
@@ -374,7 +367,7 @@ impl TorrentManager {
             let connection = Connection::new(
                 peer,
                 self.client_id.to_owned(),
-                self.info_hash.to_owned(),
+                self.metainfo.info_hash.to_owned(),
                 managers.to_owned(),
             );
 

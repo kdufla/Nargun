@@ -9,38 +9,29 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::broadcast::{self, Receiver};
 use tokio::time::{interval, Duration, MissedTickBehavior};
+use tracing::log::trace;
 
 const ANNOUNCE_RETRY: usize = 3;
 
 async fn fetch_response(url: &String) -> Result<Response> {
-    // TODO lmao I didn't know about let-else
-    match reqwest::get(url).await {
-        Ok(response) => match response.bytes().await {
-            Ok(bytes) => match Decoder::new(bytes.as_ref()).next_object() {
-                Ok(decoder_object_option) => match decoder_object_option {
-                    Some(decoder_object) => match Response::decode_bencode_object(decoder_object) {
-                        Ok(tracker_response) => Ok(tracker_response),
-                        Err(_) => Err(anyhow!("tracker response is not struct Response")),
-                    },
-                    None => Err(anyhow!("should be unreachable for the first object")),
-                },
-                Err(_) => Err(anyhow!("tracker response: not bencoded")),
-            },
-            Err(_) => Err(anyhow!("tracker response: without body")),
-        },
-        Err(_) => Err(anyhow!("tracker unreachable")),
-    }
+    let response = reqwest::get(url).await?;
+    let bytes = response.bytes().await?;
+
+    let mut decoder = Decoder::new(bytes.as_ref());
+    let decoder_object = decoder
+        .next_object()?
+        .ok_or(anyhow!("response from tracker is empty"))?;
+    let tracker_response = Response::decode_bencode_object(decoder_object)?;
+
+    Ok(tracker_response)
 }
 
 async fn contact_tracker(announce: &Announce) -> Result<Response> {
     let announce_url = announce.as_url();
 
-    println!("contact: {announce_url}");
-
     let mut tracker_response = fetch_response(&announce_url).await;
 
     if tracker_response.is_err() {
-        println!("retry: {}", announce.tracker_url);
         for _ in 0..ANNOUNCE_RETRY {
             tracker_response = fetch_response(&announce_url).await;
 
@@ -50,7 +41,7 @@ async fn contact_tracker(announce: &Announce) -> Result<Response> {
         }
     }
 
-    println!("done: {} |||| {:?}", announce.tracker_url, tracker_response);
+    trace!("{:?}", tracker_response);
     tracker_response
 }
 
@@ -65,7 +56,7 @@ async fn manage_http_tracker(
     mut announce_event_message: Receiver<bool>,
     tcp_port: u16,
 ) {
-    println!("spawned {tracker_url}");
+    trace!("spawn tracker: {tracker_url}");
     let mut announce = Announce {
         tracker_url,
         info_hash,
@@ -132,9 +123,7 @@ pub fn spawn_tracker_managers(
     tx: &broadcast::Sender<bool>, // TODO tx? really? nice naming. figure out what this is. that's what you get by kicking the naming-bucket down the road
     tcp_port: u16,
 ) {
-    println!("start");
     for tracker in torrent.http_trackers() {
-        println!("start: {tracker}");
         let tracker_url = tracker.clone();
         let info_hash = torrent.info_hash.clone();
         let peer_id = peer_id.clone();

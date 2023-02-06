@@ -6,9 +6,9 @@ use bincode::Options;
 use bytes::Bytes;
 use serde::ser::SerializeTuple;
 use serde::{Serialize, Serializer};
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
-const BYTES_IN_LEN: usize = 4;
+pub const BYTES_IN_LEN: usize = 4;
 const ID_IDX: usize = 4;
 const BITFIELD_START: usize = 5;
 const BLOCK_START: usize = 13;
@@ -77,16 +77,30 @@ macro_rules! u32_from_be_slice {
 }
 
 impl Message {
-    pub fn from_buf(buf: &[u8], expected_len: usize) -> Result<Self> {
+    pub fn len(buf: &[u8]) -> usize {
+        u32_from_be_slice!(buf[0..BYTES_IN_LEN]) as usize
+    }
+
+    pub fn from_buf(buf: &[u8]) -> Option<Self> {
         let len = u32_from_be_slice!(buf[0..BYTES_IN_LEN]);
         let len: usize = len as usize + BYTES_IN_LEN;
 
-        if len != expected_len {
-            bail!(
-                "deserialize message expected_len={}, len={}",
-                expected_len,
-                len
-            );
+        if buf.len() < len {
+            let first_zeros = buf
+                .chunks_exact(5)
+                .position(|chunk| {
+                    chunk[0] == 0
+                        && chunk[1] == 0
+                        && chunk[2] == 0
+                        && chunk[3] == 0
+                        && chunk[4] == 0
+                })
+                .map(|idx| idx * 5);
+
+            error!("message len ({len}) is more than provided buffer {}. first three consecutive zeros are at {:?} (+-4)",
+                buf.len(), first_zeros);
+
+            return None;
         }
 
         let message = if len == BYTES_IN_LEN {
@@ -123,12 +137,12 @@ impl Message {
                 ),
                 unsupported => {
                     warn!("unsupported id {}", unsupported);
-                    bail!("unsupported id {}", unsupported);
+                    return None;
                 }
             }
         };
 
-        Ok(message)
+        Some(message)
     }
 
     pub fn into_bytes(self) -> Bytes {
@@ -254,7 +268,6 @@ mod tests {
     use super::{Message, Piece, Request};
     use crate::data_structures::NoSizeBytes;
     use bytes::Bytes;
-    
 
     fn long_buf_from_message_slice(raw_message: &[u8]) -> [u8; 1 << 6] {
         let mut buf = [0u8; 1 << 6];
@@ -265,7 +278,7 @@ mod tests {
     fn test_message_ser_de(raw_message: &[u8], expected_message: Message) {
         let buf = long_buf_from_message_slice(raw_message);
 
-        let message = Message::from_buf(&buf, raw_message.len()).unwrap();
+        let message = Message::from_buf(&buf).unwrap();
 
         assert_eq!(expected_message, message);
 
@@ -408,14 +421,13 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
     fn incomplete_message() {
         let raw_message = [
-            0, 0, 0, 20, 7, 1, 2, 3, 4, 5, 6, 7, 8, 247, 251, 239, 152, 196, 66, 34, 33, 90,
+            0, 0, 0, 69, 7, 1, 2, 3, 4, 5, 6, 7, 8, 247, 251, 239, 152, 196, 66, 34, 33, 90,
         ];
 
         let buf = long_buf_from_message_slice(&raw_message);
 
-        let _ = Message::from_buf(&buf, raw_message.len()).unwrap();
+        assert_eq!(None, Message::from_buf(&buf));
     }
 }
