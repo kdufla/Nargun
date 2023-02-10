@@ -1,5 +1,3 @@
-use std::mem::discriminant;
-
 use super::handshake::initiate_handshake;
 use super::message::{Message, Piece, Request};
 use crate::client::peer::connection::BYTES_IN_LEN;
@@ -7,6 +5,8 @@ use crate::client::Peer;
 use crate::data_structures::NoSizeBytes;
 use crate::data_structures::ID;
 use anyhow::Result;
+use std::mem::discriminant;
+use std::net::SocketAddrV4;
 use tokio::io::{split, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::select;
@@ -171,19 +171,43 @@ impl MessageSender {
 
         // TODO do something with this
         let _ = match m.message {
-            ConMessageType::Unreachable => self.managers.connection_status.send(m).await,
-            ConMessageType::Disconnected => self.managers.connection_status.send(m).await,
-            ConMessageType::KeepAlive => Ok(()), // TODO impl timeout
-            ConMessageType::Choke => self.managers.connection_status.send(m).await,
-            ConMessageType::Unchoke => self.managers.connection_status.send(m).await,
-            ConMessageType::Interested => self.managers.connection_status.send(m).await,
-            ConMessageType::NotInterested => self.managers.connection_status.send(m).await,
-            ConMessageType::Have(_) => self.managers.peer_bitmap.send(m).await,
-            ConMessageType::Bitfield(_) => self.managers.peer_bitmap.send(m).await,
-            ConMessageType::Request(_) => self.managers.uploader.send(m).await,
-            ConMessageType::Piece(_) => self.managers.downloader.send(m).await,
-            ConMessageType::Cancel(_) => Ok(()), // TODO but nut really unless you're trying to implement end game algorithm
-            ConMessageType::Port(_) => self.managers.dht.send(m).await,
+            ConMessageType::Unreachable => {
+                self.managers.connection_status.send(m).await;
+            }
+            ConMessageType::Disconnected => {
+                self.managers.connection_status.send(m).await;
+            }
+            ConMessageType::KeepAlive => (), // TODO impl timeout
+            ConMessageType::Choke => {
+                self.managers.connection_status.send(m).await;
+            }
+            ConMessageType::Unchoke => {
+                self.managers.connection_status.send(m).await;
+            }
+            ConMessageType::Interested => {
+                self.managers.connection_status.send(m).await;
+            }
+            ConMessageType::NotInterested => {
+                self.managers.connection_status.send(m).await;
+            }
+            ConMessageType::Have(_) => {
+                self.managers.peer_bitmap.send(m).await;
+            }
+            ConMessageType::Bitfield(_) => {
+                self.managers.peer_bitmap.send(m).await;
+            }
+            ConMessageType::Request(_) => {
+                self.managers.uploader.send(m).await;
+            }
+            ConMessageType::Piece(_) => {
+                self.managers.downloader.send(m).await;
+            }
+            ConMessageType::Cancel(_) => (), // TODO but nut really unless you're trying to implement end game algorithm
+            ConMessageType::Port(port) => {
+                let mut peer_addr = m.peer.addr().to_owned();
+                peer_addr.set_port(port);
+                self.managers.dht.send(peer_addr).await;
+            }
         };
     }
 }
@@ -194,7 +218,7 @@ pub struct ManagerChannels {
     pub peer_bitmap: mpsc::Sender<ConnectionMessage>,
     pub downloader: mpsc::Sender<ConnectionMessage>,
     pub uploader: mpsc::Sender<ConnectionMessage>,
-    pub dht: mpsc::Sender<ConnectionMessage>,
+    pub dht: mpsc::Sender<SocketAddrV4>,
 }
 
 #[derive(Clone, Debug)]

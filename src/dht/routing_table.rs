@@ -3,49 +3,88 @@ use crate::data_structures::{ID, ID_LEN};
 use crate::transcoding::{socketaddr_from_compact_bytes, COMPACT_SOCKADDR_LEN};
 use anyhow::{anyhow, bail, Result};
 use rand::{thread_rng, Rng};
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fmt;
 use std::net::SocketAddrV4;
+use std::path::PathBuf;
 use std::time::Duration;
+use tokio::fs::{DirBuilder, File};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::Instant;
-use tracing::debug;
+use tracing::{debug, error};
 
 pub const COMPACT_NODE_LEN: usize = ID_LEN + COMPACT_SOCKADDR_LEN;
 const K_NODE_PER_BUCKET: usize = 8;
+const APP_DIR_NAME: &str = ".nargun";
+const CACHED_DHT_FILE: &str = "dht";
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct RoutingTable {
     own_id: ID,
     data: Vec<TreeNode>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 enum TreeNode {
     // when a bucket is split, 1 is stored as a right child and vice versa
     Parent(usize, usize),
     Leaf(Bucket),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 struct Bucket {
     depth: usize,
     data: [Option<Node>; K_NODE_PER_BUCKET],
 }
 
-#[derive(Eq, Clone)]
+#[derive(Eq, Clone, Deserialize, Serialize)]
 pub struct Node {
     pub id: ID,
     pub addr: SocketAddrV4,
+    #[serde(skip)]
     last_seen: Option<Instant>,
 }
 
 impl RoutingTable {
-    pub fn new(own_id: ID) -> Self {
-        let mut data = Vec::with_capacity(320);
+    pub async fn new() -> Self {
+        match Self::try_loading_from_disk().await {
+            Ok(cache) => cache,
+            Err(e) => {
+                error!(?e);
+                Self::default()
+            }
+        }
+    }
 
-        data.push(TreeNode::Leaf(Bucket::new(0)));
+    async fn try_loading_from_disk() -> Result<Self> {
+        let mut path = home::home_dir().ok_or(anyhow!("can't find home dir"))?;
+        path.push(APP_DIR_NAME);
+        path.push(CACHED_DHT_FILE);
 
-        Self { own_id, data }
+        let mut buf = Vec::new();
+
+        let mut file = File::open(path).await?;
+        file.read_to_end(&mut buf).await?;
+
+        Ok(bincode::deserialize(&buf)?)
+    }
+
+    pub async fn store(&self) {
+        let mut path = home::home_dir()
+            .ok_or(anyhow!("can't find home dir"))
+            .unwrap();
+        path.push(APP_DIR_NAME);
+
+        let mut builder = DirBuilder::new();
+        builder.recursive(true).create(&path).await.unwrap();
+
+        let encoded = bincode::serialize(&self).unwrap();
+
+        path.push(CACHED_DHT_FILE);
+        let mut file = File::create(path).await.unwrap();
+
+        file.write_all(&encoded).await.unwrap();
     }
 
     pub fn own_id(&self) -> &ID {
@@ -397,6 +436,18 @@ impl Node {
     }
 }
 
+impl Default for RoutingTable {
+    fn default() -> Self {
+        let mut data = Vec::with_capacity(320);
+        data.push(TreeNode::Leaf(Bucket::new(0)));
+
+        Self {
+            own_id: ID::new(rand::random()),
+            data,
+        }
+    }
+}
+
 impl PartialEq for Node {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
@@ -470,18 +521,16 @@ impl<'a> Iterator for RTIter<'a> {
 }
 
 #[cfg(test)]
-mod routing_table_tests {
-    use std::net::SocketAddrV4;
-    use tracing::debug;
-    use tracing_test::traced_test;
-
+mod tests {
+    use super::{RoutingTable, TreeNode, K_NODE_PER_BUCKET};
     use crate::{
         data_structures::ID,
         dht::krpc_message::Nodes,
         transcoding::{socketaddr_from_compact_bytes, COMPACT_SOCKADDR_LEN},
     };
-
-    use super::{RoutingTable, TreeNode, K_NODE_PER_BUCKET};
+    use std::net::SocketAddrV4;
+    use tracing::debug;
+    use tracing_test::traced_test;
 
     fn random_node() -> (ID, SocketAddrV4) {
         let id = ID::new(rand::random());
@@ -513,7 +562,7 @@ mod routing_table_tests {
     #[traced_test]
     #[test]
     fn basic_setup() {
-        let mut rt = RoutingTable::new(ID::new(rand::random()));
+        let mut rt = RoutingTable::default();
 
         let (id, addr) = random_node();
 
@@ -522,9 +571,27 @@ mod routing_table_tests {
         assert!(rt.contains_node(&id))
     }
 
+    #[tokio::test]
+    async fn cache() {
+        let mut default_rt = RoutingTable::default();
+
+        for _ in 0..128 {
+            let (id, addr) = random_node();
+            default_rt.touch_node(id, addr);
+        }
+
+        default_rt.store().await;
+
+        let loaded_rt = RoutingTable::new().await;
+
+        for (default, loaded) in default_rt.data.iter().zip(loaded_rt.data.iter()) {
+            assert_eq!(default, loaded);
+        }
+    }
+
     #[test]
     fn no_duplicates() {
-        let mut rt = RoutingTable::new(ID::new(rand::random()));
+        let mut rt = RoutingTable::default();
 
         let (id, addr) = random_node();
 
@@ -537,7 +604,7 @@ mod routing_table_tests {
 
     #[test]
     fn split() {
-        let mut rt = RoutingTable::new(ID::new(rand::random()));
+        let mut rt = RoutingTable::default();
         let (mut id, addr) = random_node();
 
         for i in 0..K_NODE_PER_BUCKET {
@@ -561,7 +628,7 @@ mod routing_table_tests {
 
     #[test]
     fn when_first_split_is_not_enough() {
-        let mut rt = RoutingTable::new(ID::new(rand::random()));
+        let mut rt = RoutingTable::default();
         let (mut id, addr) = random_node();
 
         for i in 0..K_NODE_PER_BUCKET {
@@ -596,7 +663,7 @@ mod routing_table_tests {
 
     #[test]
     fn find_exact_node() {
-        let mut rt = RoutingTable::new(ID::new(rand::random()));
+        let mut rt = RoutingTable::default();
         let (mut id, addr) = random_node();
 
         let og_id = id.to_owned();
@@ -622,7 +689,7 @@ mod routing_table_tests {
 
     #[test]
     fn find_closest_nodes() {
-        let mut rt = RoutingTable::new(ID::new(rand::random()));
+        let mut rt = RoutingTable::default();
         let (target_id, _) = random_node();
 
         for _ in 0..260 {
@@ -652,7 +719,9 @@ mod routing_table_tests {
     #[traced_test]
     #[test]
     fn iterator() {
-        let mut rt = RoutingTable::new(zero_id_with_first!(0b1111_1111));
+        let mut rt = RoutingTable::default();
+        rt.own_id = zero_id_with_first!(0b1111_1111);
+
         let (_, addr) = random_node();
 
         let left_ids = [

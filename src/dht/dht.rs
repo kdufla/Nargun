@@ -48,7 +48,7 @@ pub fn start_dht(peers: Peers, info_hash: ID, peer_with_dht: mpsc::Receiver<Sock
 // TODO store routing table
 async fn dht(mut peers: Peers, info_hash: ID, mut peer_with_dht: mpsc::Receiver<SocketAddrV4>) {
     let (mut routing_table, udp_connection, mut dht_command_rx, mut peer_map) =
-        setup(&peers, info_hash);
+        setup(&peers, info_hash).await;
 
     loop {
         match select! {
@@ -64,18 +64,17 @@ async fn dht(mut peers: Peers, info_hash: ID, mut peer_with_dht: mpsc::Receiver<
     }
 }
 
-fn setup(
+async fn setup(
     peers: &Peers,
     info_hash: ID,
 ) -> (RoutingTable, Connection, Receiver<DhtCommand>, PeerMap) {
-    let own_node_id = ID::new(rand::random());
-
-    let routing_table = RoutingTable::new(own_node_id.to_owned());
+    let routing_table = RoutingTable::new().await;
 
     let (dht_tx, dht_rx) = mpsc::channel(64);
     let (conn_tx, conn_rx) = mpsc::channel(64);
 
-    let udp_connection = Connection::new(own_node_id, conn_tx, conn_rx, dht_tx.to_owned());
+    let udp_connection =
+        Connection::new(*routing_table.own_id(), conn_tx, conn_rx, dht_tx.to_owned());
 
     let known_peers: HashSet<Peer> = peers.peer_addresses().into_iter().collect();
     let peer_map = HashMap::from([(info_hash.to_owned(), known_peers)]);

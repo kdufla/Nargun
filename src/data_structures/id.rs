@@ -10,7 +10,7 @@ use std::{
 
 pub const ID_LEN: usize = 20;
 
-#[derive(Clone, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct ID([u8; ID_LEN]);
 
 impl ID {
