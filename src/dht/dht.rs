@@ -6,6 +6,7 @@ use super::{
 use crate::{
     client::{Peer, Peers, COMPACT_PEER_LEN},
     data_structures::ID,
+    shutdown,
 };
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
@@ -20,7 +21,7 @@ use tokio::{
     sync::mpsc::{self, Receiver},
     time::sleep,
 };
-use tracing::{debug, error, warn};
+use tracing::{debug, error, instrument, warn};
 
 type PeerMap = HashMap<ID, HashSet<Peer>>;
 
@@ -39,26 +40,42 @@ pub enum DhtCommand {
     FetchPeers(ID),
 }
 
-pub fn start_dht(peers: Peers, info_hash: ID, peer_with_dht: mpsc::Receiver<SocketAddrV4>) {
+pub fn start_dht(
+    peers: Peers,
+    info_hash: ID,
+    peer_with_dht: mpsc::Receiver<SocketAddrV4>,
+    shutdown_rx: shutdown::Receiver,
+) {
     tokio::spawn(async move {
-        dht(peers, info_hash, peer_with_dht).await;
+        dht(peers, info_hash, peer_with_dht, shutdown_rx).await;
     });
 }
 
 // TODO store routing table
-async fn dht(mut peers: Peers, info_hash: ID, mut peer_with_dht: mpsc::Receiver<SocketAddrV4>) {
+#[instrument(skip_all)]
+async fn dht(
+    mut peers: Peers,
+    info_hash: ID,
+    mut peer_with_dht: mpsc::Receiver<SocketAddrV4>,
+    mut shutdown_rx: shutdown::Receiver,
+) {
     let (mut routing_table, udp_connection, mut dht_command_rx, mut peer_map) =
         setup(&peers, info_hash).await;
 
     loop {
         match select! {
-            addr = peer_with_dht.recv() => try_ping_node(&udp_connection, addr).await,
+            _ = shutdown_rx.recv() => {
+                debug!("shutdown");
+                routing_table.store().await;
+                return;
+            }
+            addr = peer_with_dht.recv() => {
+                debug!("new node from client {:?}", addr);
+                try_ping_node(&udp_connection, addr).await
+            },
             command = dht_command_rx.recv() => process_incoming_command(command, &mut routing_table, &udp_connection, &mut peers, &mut peer_map).await,
         } {
-            Ok(_) => debug!(
-                "command handled\nrouting_table = {:?}\npeer_map = {:?}",
-                routing_table, peer_map
-            ),
+            Ok(_) => (),
             Err(e) => error!("dht command failed. e = {:?}", e),
         }
     }
@@ -170,6 +187,7 @@ fn store_new_peers(
 
     // making sure I need this because it's a locking insert
     if was_inserted && torrent_peers.serve(&info_hash) {
+        debug!("new peers {:?}", new_peers);
         torrent_peers.extend(&new_peers);
     }
 }
@@ -343,7 +361,6 @@ async fn periodically_fetch_nodes(dht_command_tx: mpsc::Sender<DhtCommand>) {
             MAX_NODE_FETCH_SLEEP
         };
 
-        debug!("fetch_nodes: sleep for {} secs", seconds_to_sleep);
         sleep(Duration::from_secs(seconds_to_sleep)).await;
     }
 }
@@ -367,7 +384,6 @@ async fn periodically_fetch_peers(dht_command_tx: mpsc::Sender<DhtCommand>, info
             MAX_PEER_FETCH_SLEEP
         };
 
-        debug!("fetch_peers: sleep for {} secs", seconds_to_sleep);
         sleep(Duration::from_secs(seconds_to_sleep)).await;
     }
 }

@@ -5,19 +5,19 @@ mod dht;
 mod fs;
 mod gateway_device;
 mod macros;
+mod shutdown;
 mod transcoding;
 
 use anyhow::Result;
 use client::{start_client, Peers};
-use core::time;
 use data_structures::ID;
 use dht::start_dht;
-// use fs::build_dir_tree;
 use std::{
     net::SocketAddrV4,
     sync::{atomic::AtomicU64, Arc},
 };
 use tokio::{
+    signal,
     sync::{broadcast, mpsc},
     time::{sleep, Instant},
 };
@@ -59,6 +59,8 @@ async fn main() -> Result<()> {
     // env::set_var("RUST_BACKTRACE", "1");
     let client_id = ID::new(rand::random());
 
+    let (shutdown_tx, shutdown_rx) = shutdown::channel();
+
     let config = config::Config::new();
     let torrent = Torrent::from_file(&config.file).unwrap();
     let peers = Peers::new(&torrent.info_hash);
@@ -66,6 +68,13 @@ async fn main() -> Result<()> {
     let (dht_tx, dht_rx) = mpsc::channel(1 << 5);
     let (that_unknown_tx, _rx) = broadcast::channel(1 << 5);
     let pieces_downloaded = Arc::new(AtomicU64::new(0));
+
+    start_dht(
+        peers.to_owned(),
+        torrent.info_hash,
+        dht_rx,
+        shutdown_rx.clone(),
+    );
 
     start_client(
         client_id,
@@ -75,6 +84,7 @@ async fn main() -> Result<()> {
         pieces_downloaded,
         &that_unknown_tx,
         tcp_port,
+        shutdown_rx.clone(),
     );
     // let _ = fs::FS::new("base_dir".to_string(), &torrent.info).await;
 
@@ -152,7 +162,21 @@ async fn main() -> Result<()> {
     //         }
     //     }
     // }
-    sleep(time::Duration::from_secs(1000)).await;
+
+    drop(shutdown_rx);
+
+    match signal::ctrl_c().await {
+        Ok(()) => {
+            info!("shutting down");
+            let active_task_waiter = shutdown_tx.send();
+            active_task_waiter.wait().await;
+        }
+        Err(err) => {
+            eprintln!("Unable to listen for shutdown signal: {}", err);
+        }
+    }
+
+    // sleep(time::Duration::from_secs(1000)).await;
 
     Ok(())
 }

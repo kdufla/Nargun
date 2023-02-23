@@ -2,9 +2,12 @@ mod manager;
 mod peer;
 mod tracker;
 
-use std::sync::{atomic::AtomicU64, Arc};
+use std::{
+    net::SocketAddrV4,
+    sync::{atomic::AtomicU64, Arc},
+};
 
-use crate::{data_structures::ID, transcoding::metainfo::Torrent};
+use crate::{data_structures::ID, shutdown, transcoding::metainfo::Torrent};
 use tokio::sync::{broadcast, mpsc};
 
 pub use peer::{
@@ -20,11 +23,12 @@ use self::peer::connection::ConnectionMessage;
 pub fn start_client(
     client_id: ID,
     peers: Peers,
-    dht_tx: mpsc::Sender<ConnectionMessage>, // TODO connection is small enough, dht doesn't need to know about whole peer message, this must be a sockaddr
+    dht_tx: mpsc::Sender<SocketAddrV4>,
     torrent: Torrent,
     pieces_downloaded: Arc<AtomicU64>,
-    tx: &broadcast::Sender<bool>,
+    tx: &broadcast::Sender<()>,
     tcp_port: u16,
+    shutdown_rx: shutdown::Receiver,
 ) {
     tracker::spawn_tracker_managers(
         &torrent,
@@ -33,6 +37,7 @@ pub fn start_client(
         pieces_downloaded,
         tx,
         tcp_port,
+        shutdown_rx,
     );
 
     manager::TorrentManager::spawn(torrent, client_id, peers, dht_tx);

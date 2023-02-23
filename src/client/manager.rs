@@ -4,12 +4,14 @@ use super::peer::connection::{
 use super::peer::{manage_peer, PeerManagerCommand};
 use super::peer::{Peer, Peers, Status as PeerStatus};
 use crate::data_structures::{Bitmap, ID};
+use crate::shutdown;
 use crate::transcoding::metainfo::Torrent;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::net::SocketAddrV4;
 use std::time::Duration;
 use tokio::{select, sync::mpsc, time::interval};
-use tracing::{debug, error, warn};
+use tracing::{debug, error, instrument, warn};
 
 const MAX_ACTIVE_PEERS: usize = 10; // TODO this should come from config
 const MAX_ACTIVE_PIECES: usize = 9; // TODO this should come from config
@@ -31,7 +33,7 @@ pub struct TorrentManager {
     frequency_map: Vec<u16>,
     assigned_peer_count: Vec<u8>,
     finished_piece_tx: mpsc::Sender<FinishedPiece>,
-    dht_tx: mpsc::Sender<ConnectionMessage>,
+    dht_tx: mpsc::Sender<SocketAddrV4>,
     self_tx: mpsc::Sender<ConnectionMessage>,
 }
 
@@ -47,7 +49,7 @@ impl TorrentManager {
         metainfo: Torrent,
         client_id: ID,
         peers: Peers,
-        dht_tx: mpsc::Sender<ConnectionMessage>,
+        dht_tx: mpsc::Sender<SocketAddrV4>,
     ) {
         let (self_tx, self_rx) = mpsc::channel(1 << 5);
         let (finished_piece_tx, finished_piece_rx) = mpsc::channel(1 << 4);
@@ -73,6 +75,7 @@ impl TorrentManager {
         });
     }
 
+    #[instrument(skip_all)]
     async fn manage(
         mut self,
         mut self_rx: mpsc::Receiver<ConnectionMessage>,
