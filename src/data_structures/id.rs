@@ -71,6 +71,23 @@ impl ID {
         Ordering::Equal
     }
 
+    fn bit_iter(&self) -> BitIter {
+        BitIter {
+            data: self.to_owned(),
+            idx: 0,
+        }
+    }
+
+    pub fn first_diff_bit_idx(&self, other: &Self) -> Option<usize> {
+        for (idx, (l, r)) in self.bit_iter().zip(other.bit_iter()).enumerate() {
+            if l != r {
+                return Some(idx);
+            }
+        }
+
+        None
+    }
+
     pub fn randomize_after_bit(&mut self, i: usize) {
         if i >= ID_LEN * 8 {
             return;
@@ -91,11 +108,16 @@ impl ID {
         }
     }
 
-    pub fn left_or_right_by_depth<T>(&self, depth: usize, left: T, right: T) -> T {
-        if self.get_bit(depth) {
-            right
+    pub fn bit_based_order<T>(
+        &self,
+        bit_idx: usize,
+        first_if_true: T,
+        first_if_false: T,
+    ) -> (T, T) {
+        if self.get_bit(bit_idx) {
+            (first_if_true, first_if_false)
         } else {
-            left
+            (first_if_false, first_if_true)
         }
     }
 
@@ -225,6 +247,25 @@ impl From<Vec<u8>> for ID {
         }
 
         ID(vec.try_into().unwrap())
+    }
+}
+
+struct BitIter {
+    data: ID,
+    idx: usize,
+}
+
+impl Iterator for BitIter {
+    type Item = bool;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.idx < ID_LEN * 8 {
+            let rv = self.data.get_bit(self.idx);
+            self.idx += 1;
+            Some(rv)
+        } else {
+            None
+        }
     }
 }
 

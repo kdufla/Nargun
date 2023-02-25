@@ -96,6 +96,10 @@ async fn setup(
     let known_peers: HashSet<Peer> = peers.peer_addresses().into_iter().collect();
     let peer_map = HashMap::from([(info_hash.to_owned(), known_peers)]);
 
+    for addr in routing_table.iter_nodes().map(|node| node.addr) {
+        ping_node(&udp_connection, addr).await;
+    }
+
     let dht_tx_clone = dht_tx.clone();
     tokio::spawn(async move {
         periodically_fetch_nodes(dht_tx_clone).await;
