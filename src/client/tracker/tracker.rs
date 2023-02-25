@@ -10,9 +10,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::broadcast::{self, Receiver};
 use tokio::time::{sleep, Duration};
-use tracing::{debug, instrument, trace, warn};
+use tracing::{instrument, trace, warn};
 
-const TIMEOUT_SECS: u64 = 5;
+const TIMEOUT_SECS: u64 = 1 << 7;
+const RETRY_SECS: u64 = 1 << 6;
 
 pub fn spawn_tracker_managers(
     torrent: &Torrent,
@@ -85,16 +86,15 @@ async fn manage_http_tracker(
 
         if announce.tracker_id.is_none() && response.tracker_id.is_some() {
             announce.tracker_id = response.tracker_id.clone();
-        }
+        };
 
         tokio::select! {
             _ = shutdown_rx.recv() => {
-                debug!("shutdown");
                 announce.event = Some(AnnounceEvent::Stopped);
                 announce.left = (piece_count - pieces_downloaded.load(Ordering::Relaxed)) * piece_length;
                 // announce.uploaded = TODO
                 // announce.downloaded = TODO
-                let _ = contact_tracker(&announce, &mut shutdown_rx).await;
+                let _ = send_request(&announce.as_url()).await;
                 break;
             },
             _ = sleep(Duration::from_secs(response.interval)) => {
@@ -130,7 +130,6 @@ async fn contact_tracker(
     loop {
         let response = tokio::select! {
             _ = shutdown_rx.recv() => {
-                debug!("shutdown");
                 return None;
             },
             response = send_request(&announce_url) => {response}
@@ -140,6 +139,13 @@ async fn contact_tracker(
             Ok(resp) => return Some(resp),
             Err(e) => warn!(?e),
         }
+
+        tokio::select! {
+            _ = shutdown_rx.recv() => {
+                return None;
+            },
+            _ = sleep(Duration::from_secs(RETRY_SECS)) => {}
+        };
     }
 }
 
@@ -157,8 +163,6 @@ async fn send_request(url: &str) -> Result<Response> {
         .ok_or(anyhow!("response from tracker is empty"))?;
 
     let decoded_response = Response::decode_bencode_object(decoder_object)?;
-
-    debug!(?decoded_response);
 
     Ok(decoded_response)
 }
