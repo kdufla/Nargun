@@ -26,8 +26,8 @@ pub fn spawn_tracker_managers(
 ) {
     for http_tracker in torrent.http_trackers() {
         let tracker_url = http_tracker.clone();
-        let info_hash = torrent.info_hash.clone();
-        let peer_id = peer_id.clone();
+        let info_hash = torrent.info_hash;
+        let peer_id = *peer_id;
         let piece_count = torrent.count_pieces() as u64;
         let piece_length = torrent.info.piece_length;
         let pieces_downloaded = pieces_downloaded.clone();

@@ -60,7 +60,8 @@ impl Torrent {
         Self::from_buf(&buf)
     }
 
-    pub fn is_valid_piece(&self, piece_idx: usize, piece_data: &Vec<Vec<u8>>) -> bool {
+    // TODO using piece_hash seems to be better than hauling torrent struct everywhere
+    pub fn _is_valid_piece(&self, piece_idx: usize, piece_data: &Vec<Vec<u8>>) -> bool {
         piece_data.len() == unsigned_ceil_div!(self.info.piece_length as usize, BLOCK_SIZE)
             && piece_data.iter().all(|block| block.len() == BLOCK_SIZE)
             && self.info.pieces[piece_idx] == Self::piece_hash(piece_data)
@@ -513,7 +514,7 @@ mod tests {
             file.read_exact(block_buf).unwrap();
         }
 
-        assert!(torrent.is_valid_piece(1, &buf));
+        assert!(torrent._is_valid_piece(1, &buf));
     }
 
     #[test]
@@ -526,7 +527,7 @@ mod tests {
         );
 
         for (piece_idx, piece_data) in data.iter().enumerate() {
-            assert!(torrent.is_valid_piece(piece_idx, piece_data))
+            assert!(torrent._is_valid_piece(piece_idx, piece_data))
         }
     }
 }

@@ -53,7 +53,7 @@ impl Receiver {
         }
     }
 
-    pub async fn recv(&mut self) -> () {
+    pub async fn recv(&mut self) {
         self.receiver.recv().await.unwrap()
     }
 }

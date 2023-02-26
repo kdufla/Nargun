@@ -17,7 +17,7 @@ pub use peer::{
     COMPACT_PEER_LEN,
 };
 
-use self::peer::connection::ConnectionMessage;
+
 
 // TODO probably before committing, figure this shit out!
 pub fn start_client(

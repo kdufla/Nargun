@@ -11,7 +11,7 @@ use std::{collections::HashMap, time::Duration};
 use tokio::{
     select,
     sync::mpsc,
-    time::{sleep, Instant},
+    time::{sleep},
 };
 use tracing::warn;
 

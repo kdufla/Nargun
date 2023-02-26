@@ -13,13 +13,12 @@ use tokio::select;
 use tokio::sync::mpsc;
 use tokio::time::{interval, Duration};
 use tracing::log::trace;
-use tracing::{debug, debug_span, error, instrument, trace_span, warn, Span};
+use tracing::{error, instrument, warn};
 
 pub const BLOCK_SIZE: usize = 1 << 14;
 pub const DESCRIPTIVE_DATA_SIZE: usize = 1 << 7;
 pub const MAX_MESSAGE_BYTES: usize = BLOCK_SIZE + DESCRIPTIVE_DATA_SIZE;
 pub const KEEP_ALIVE_INTERVAL_SECS: u64 = 100;
-pub const MAX_CONCURRENT_REQUESTS: u32 = 3;
 const MESSAGE_CHANNEL_BUFFER: usize = 1 << 5;
 
 pub struct Connection {
@@ -62,8 +61,10 @@ async fn manage_tcp(
     let mut stream = match initiate_handshake(&peer.into(), &info_hash, &client_id).await {
         Ok(s) => s,
         Err(e) => {
-            manager_messenger.send(ConMessageType::Unreachable).await;
             warn!(?e);
+            if let Err(e) = manager_messenger.send(ConMessageType::Unreachable).await {
+                warn!(?e);
+            }
             return;
         }
     };
@@ -79,7 +80,9 @@ async fn manage_tcp(
         rv = manager_receiver( read_stream, &manager_messenger) => {rv},
     };
 
-    manager_messenger.send(ConMessageType::Disconnected).await;
+    if let Err(e) = manager_messenger.send(ConMessageType::Disconnected).await {
+        warn!(?e);
+    }
 }
 
 async fn manager_sender(
@@ -137,7 +140,9 @@ async fn manager_receiver(mut stream: ReadHalf<&mut TcpStream>, manager_messenge
             if message_len <= data_len {
                 if let Some(message) = Message::from_buf(&buf) {
                     trace!("received msg {:?}", discriminant(&message));
-                    manager_messenger.send(message.into()).await;
+                    if let Err(e) = manager_messenger.send(message.into()).await {
+                        warn!(?e);
+                    }
                 };
 
                 data_start += message_len;
@@ -163,52 +168,34 @@ struct MessageSender {
 }
 
 impl MessageSender {
-    async fn send(&self, message: ConMessageType) {
+    async fn send(&self, message: ConMessageType) -> Result<()> {
         let m = ConnectionMessage {
             peer: self.peer,
             message,
         };
 
         // TODO do something with this
-        let _ = match m.message {
-            ConMessageType::Unreachable => {
-                self.managers.connection_status.send(m).await;
-            }
-            ConMessageType::Disconnected => {
-                self.managers.connection_status.send(m).await;
-            }
+        match m.message {
+            ConMessageType::Unreachable => self.managers.connection_status.send(m).await?,
+            ConMessageType::Disconnected => self.managers.connection_status.send(m).await?,
             ConMessageType::KeepAlive => (), // TODO impl timeout
-            ConMessageType::Choke => {
-                self.managers.connection_status.send(m).await;
-            }
-            ConMessageType::Unchoke => {
-                self.managers.connection_status.send(m).await;
-            }
-            ConMessageType::Interested => {
-                self.managers.connection_status.send(m).await;
-            }
-            ConMessageType::NotInterested => {
-                self.managers.connection_status.send(m).await;
-            }
-            ConMessageType::Have(_) => {
-                self.managers.peer_bitmap.send(m).await;
-            }
-            ConMessageType::Bitfield(_) => {
-                self.managers.peer_bitmap.send(m).await;
-            }
-            ConMessageType::Request(_) => {
-                self.managers.uploader.send(m).await;
-            }
-            ConMessageType::Piece(_) => {
-                self.managers.downloader.send(m).await;
-            }
+            ConMessageType::Choke => self.managers.connection_status.send(m).await?,
+            ConMessageType::Unchoke => self.managers.connection_status.send(m).await?,
+            ConMessageType::Interested => self.managers.connection_status.send(m).await?,
+            ConMessageType::NotInterested => self.managers.connection_status.send(m).await?,
+            ConMessageType::Have(_) => self.managers.peer_bitmap.send(m).await?,
+            ConMessageType::Bitfield(_) => self.managers.peer_bitmap.send(m).await?,
+            ConMessageType::Request(_) => self.managers.uploader.send(m).await?,
+            ConMessageType::Piece(_) => self.managers.downloader.send(m).await?,
             ConMessageType::Cancel(_) => (), // TODO but nut really unless you're trying to implement end game algorithm
             ConMessageType::Port(port) => {
                 let mut peer_addr = m.peer.addr().to_owned();
                 peer_addr.set_port(port);
-                self.managers.dht.send(peer_addr).await;
+                self.managers.dht.send(peer_addr).await?
             }
         };
+
+        Ok(())
     }
 }
 

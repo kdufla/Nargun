@@ -2,14 +2,12 @@ use super::{COMPACT_NODE_LEN, K_NODE_PER_BUCKET};
 use crate::data_structures::{ID, ID_LEN};
 use crate::transcoding::socketaddr_from_compact_bytes;
 use anyhow::{anyhow, bail, Result};
-use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fmt;
 use std::net::SocketAddrV4;
 use std::time::Duration;
 use tokio::time::Instant;
-// use tracing::{debug, error};
 
 const NODE_VALIDITY_SECS: u64 = 15 * 60;
 
@@ -290,7 +288,6 @@ mod tests {
         let node_idx = 2;
         let node = bucket.data[node_idx].as_mut().unwrap();
         node.last_seen = Some(Instant::now() - Duration::from_secs(NODE_VALIDITY_SECS));
-        drop(node);
         let (id, addr) = &nodes[node_idx];
         assert!(bucket.try_insert(id, addr).is_ok());
     }

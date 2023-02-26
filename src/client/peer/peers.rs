@@ -4,9 +4,6 @@ use std::collections::HashMap;
 use std::mem::discriminant;
 use std::sync::{Arc, Mutex as StdMutex};
 
-pub const COMPACT_SOCKADDR_LEN: usize = 6;
-pub const COMPACT_PEER_LEN: usize = COMPACT_SOCKADDR_LEN;
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Status {
     // TODO these need Instants and weighted sort based on elapsed time

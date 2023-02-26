@@ -24,6 +24,7 @@ pub enum QueryCommand {
     GetPeers {
         info_hash: ID,
     },
+    // TODO announce is still unimplemented
     AnnouncePeer {
         info_hash: ID,
         port: u16,

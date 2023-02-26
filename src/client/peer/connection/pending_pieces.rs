@@ -32,7 +32,6 @@ pub struct FinishedPiece {
 }
 
 struct Piece {
-    remaining: usize,
     pending: usize,
     downloaded: usize,
     data: Vec<Block>,
@@ -124,6 +123,8 @@ impl PendingPieces {
         }
     }
 
+    // TODO this should be used, you probably forgot it. remove this # when you find its place.
+    #[allow(dead_code)]
     pub fn cancel_pending(&mut self, from: &Peer) {
         let mut data = self.data.lock().unwrap();
 
@@ -227,7 +228,6 @@ impl Piece {
         let data = vec![Block::default(); piece_count];
 
         Self {
-            remaining: piece_count,
             pending: 0,
             downloaded: 0,
             data,
@@ -254,14 +254,6 @@ impl Block {
         description.time_sent.elapsed() > Duration::from_secs(MAINLINE_TCP_REQUEST_TIMEOUT_SECS)
     }
 
-    fn is_not_expired(&self) -> bool {
-        let Self::Pending(description) = self else {
-            return false;
-        };
-
-        description.time_sent.elapsed() < Duration::from_secs(MAINLINE_TCP_REQUEST_TIMEOUT_SECS)
-    }
-
     fn is_expected_from(&self, target: &Peer) -> bool {
         let Self::Pending(description) = self else {
             return false;
@@ -277,25 +269,5 @@ impl From<Block> for Vec<u8> {
             Block::Downloaded(data) => data,
             _ => panic!("block must be Block::Downloaded"),
         }
-    }
-}
-
-struct SingleCycleWrappingIter<'a, T> {
-    iter: Box<dyn Iterator<Item = &'a T> + 'a>,
-}
-
-impl<'a, T> SingleCycleWrappingIter<'a, T> {
-    fn new(data: &'a [T], start: usize) -> Self {
-        Self {
-            iter: Box::new(data[start..].iter().chain(data[..start].iter())),
-        }
-    }
-}
-
-impl<'a, T> Iterator for SingleCycleWrappingIter<'a, T> {
-    type Item = &'a T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next()
     }
 }

@@ -1,6 +1,6 @@
 use super::bucket::Bucket;
 use super::{Node, K_NODE_PER_BUCKET};
-use crate::data_structures::ID;
+use crate::data_structures::{ID, ID_BIT_COUNT};
 use crate::dht::krpc_message::Nodes;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
@@ -70,7 +70,7 @@ impl RoutingTable {
     }
 
     pub fn iter_nodes(&self) -> impl Iterator<Item = &Node> {
-        self.data.iter().map(|bucket| bucket.iter_nodes()).flatten()
+        self.data.iter().flat_map(|bucket| bucket.iter_nodes())
     }
 
     pub fn find_node(&self, id: &ID) -> Option<Nodes> {
@@ -215,7 +215,7 @@ impl RoutingTable {
 impl Default for RoutingTable {
     fn default() -> Self {
         let own_id = ID::new(rand::random());
-        let mut data = Vec::new();
+        let mut data = Vec::with_capacity(ID_BIT_COUNT + 1);
         data.push(Bucket::new(0));
 
         Self { own_id, data }
@@ -232,7 +232,7 @@ impl<'a> Iterator for RandIdInFillableBucketIter<'a> {
     type Item = ID;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some(bucket) = self.iter.next() {
+        for bucket in self.iter.by_ref() {
             if bucket.is_full() {
                 continue;
             }
@@ -246,7 +246,7 @@ impl<'a> Iterator for RandIdInFillableBucketIter<'a> {
 
         let last = std::mem::replace(&mut self.last, None)?;
 
-        if last.depth() == 160 && last.is_full() {
+        if last.depth() == ID_BIT_COUNT && last.is_full() {
             None
         } else {
             Some(self.own_id)
@@ -431,8 +431,10 @@ mod tests {
     #[traced_test]
     #[test]
     fn iterator() {
-        let mut rt = RoutingTable::default();
-        rt.own_id = zero_id_with_first!(0b1111_1111);
+        let mut rt = RoutingTable {
+            own_id: zero_id_with_first!(0b1111_1111),
+            ..Default::default()
+        };
 
         let (_, addr) = random_node();
 

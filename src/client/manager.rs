@@ -4,7 +4,7 @@ use super::peer::connection::{
 use super::peer::{manage_peer, PeerManagerCommand};
 use super::peer::{Peer, Peers, Status as PeerStatus};
 use crate::data_structures::{Bitmap, ID};
-use crate::shutdown;
+
 use crate::transcoding::metainfo::Torrent;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -130,17 +130,17 @@ impl TorrentManager {
         };
 
         self.active_pieces.change(piece_idx, true);
-        peer_info.working.change(piece_idx, true);
+        let _ = peer_info.working.change(piece_idx, true);
     }
 
-    fn count_available_pieces(&self) -> usize {
-        self.frequency_map
-            .iter()
-            .zip(self.local_data.iter())
-            .zip(self.active_pieces.iter())
-            .filter(|((freq, local), active)| !local && !active && **freq > 0)
-            .count()
-    }
+    // fn count_available_pieces(&self) -> usize {
+    //     self.frequency_map
+    //         .iter()
+    //         .zip(self.local_data.iter())
+    //         .zip(self.active_pieces.iter())
+    //         .filter(|((freq, local), active)| !local && !active && **freq > 0)
+    //         .count()
+    // }
 
     fn select_piece(&mut self) -> Option<(Peer, usize, ID)> {
         self.sequential_select_piece().map(|(peer, piece_idx)| {

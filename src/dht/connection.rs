@@ -71,7 +71,7 @@ impl Connection {
         let pending = PendingRequests::new();
 
         select! {
-            _ = self.manage_sender(conn_command_rx, sock_send, secret.clone(), pending.clone()) => {},
+            _ = self.manage_sender(conn_command_rx, sock_send, secret, pending.clone()) => {},
             _ = self.manage_receiver(sock_recv, dht_command_tx, secret, pending.clone()) => {},
         }
 

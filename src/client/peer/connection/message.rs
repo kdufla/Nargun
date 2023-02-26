@@ -1,7 +1,7 @@
 use super::BLOCK_SIZE;
 use crate::client::peer::BlockAddress;
 use crate::data_structures::NoSizeBytes;
-use anyhow::{bail, Result};
+use anyhow::{Result};
 use bincode::Options;
 use bytes::Bytes;
 use serde::ser::SerializeTuple;

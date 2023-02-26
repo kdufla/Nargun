@@ -106,6 +106,7 @@ pub enum Nodes {
 
 pub type Tid = [u8; 5];
 
+// TODO I'm not a fan of these boilerplate methods. I'm not sure if it's bad, but you can think about it.
 impl Message {
     pub fn into_bytes(self) -> Result<Vec<u8>> {
         bendy::serde::to_bytes(&self).map_err(|e| anyhow!("{}", e))
@@ -113,15 +114,6 @@ impl Message {
 
     pub fn from_bytes(buf: &[u8]) -> Result<Self> {
         bendy::serde::from_bytes::<Self>(buf).map_err(|e| anyhow!("{}", e))
-    }
-
-    pub fn get_tid(&self) -> Bytes {
-        match self {
-            Self::Query { transaction_id, .. } => transaction_id,
-            Self::Response { transaction_id, .. } => transaction_id,
-            Self::Error { transaction_id, .. } => transaction_id,
-        }
-        .as_bytes()
     }
 
     pub fn ping_query(id: &ID) -> Self {
@@ -147,7 +139,7 @@ impl Message {
             msg_type: MessageType(b'q'),
             method_name: "find_node".to_string(),
             arguments: Arguments::FindNode {
-                id: id.clone(),
+                id: *id,
                 target: target.to_owned(),
             },
         }
@@ -157,10 +149,7 @@ impl Message {
         Self::Response {
             transaction_id: NoSizeBytes::new(transaction_id),
             msg_type: MessageType(b'r'),
-            response: Response::FindNode {
-                id: id.clone(),
-                nodes,
-            },
+            response: Response::FindNode { id: *id, nodes },
         }
     }
 

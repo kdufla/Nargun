@@ -9,6 +9,7 @@ use std::{
 };
 
 pub const ID_LEN: usize = 20;
+pub const ID_BIT_COUNT: usize = ID_LEN * 8;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct ID([u8; ID_LEN]);
@@ -89,7 +90,7 @@ impl ID {
     }
 
     pub fn randomize_after_bit(&mut self, i: usize) {
-        if i >= ID_LEN * 8 {
+        if i >= ID_BIT_COUNT {
             return;
         }
 
