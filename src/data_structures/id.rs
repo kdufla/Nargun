@@ -160,6 +160,12 @@ impl Serialize for ID {
     }
 }
 
+impl Default for ID {
+    fn default() -> Self {
+        Self::new(rand::random())
+    }
+}
+
 impl<'de> Deserialize<'de> for ID {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

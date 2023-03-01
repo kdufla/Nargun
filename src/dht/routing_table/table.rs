@@ -24,10 +24,7 @@ pub struct RoutingTable {
 impl RoutingTable {
     pub async fn new() -> Self {
         match Self::try_loading_from_disk().await {
-            Ok(cache) => {
-                debug!(?cache);
-                cache
-            }
+            Ok(cache) => cache,
             Err(e) => {
                 error!(?e);
                 Self::default()
@@ -49,6 +46,7 @@ impl RoutingTable {
     }
 
     pub async fn store(&self) {
+        debug!(?self);
         let mut path = home::home_dir()
             .ok_or(anyhow!("can't find home dir"))
             .unwrap();
@@ -123,10 +121,8 @@ impl RoutingTable {
 
         if !nodes.is_empty() {
             nodes.sort_by(|a, b| a.cmp_by_distance_to_id(b, id));
-            debug!("found closest for {:?}, closest: {:?}", id, nodes);
             Some(Nodes::Closest(nodes))
         } else {
-            debug!("no closest nodes for {:?}", id);
             None
         }
     }
@@ -263,7 +259,6 @@ mod tests {
         transcoding::{socketaddr_from_compact_bytes, COMPACT_SOCKADDR_LEN},
     };
     use std::net::SocketAddrV4;
-    use tracing::debug;
     use tracing_test::traced_test;
 
     fn random_node() -> (ID, SocketAddrV4) {
@@ -364,8 +359,6 @@ mod tests {
 
         rt.insert_new_good(id, addr);
 
-        debug!(?rt);
-
         check_node_counts_at_idx(&rt, 0, 0, 0, 8);
         check_node_counts_at_idx(&rt, 1, 4, 0, 4);
         check_node_counts_at_idx(&rt, 2, 5, 0, 3);
@@ -464,10 +457,6 @@ mod tests {
 
         for id in ones {
             rt.insert_new_good(id, addr);
-        }
-
-        for id in rt.iter_over_ids_within_fillable_buckets() {
-            debug!(?id);
         }
 
         {

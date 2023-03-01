@@ -1,11 +1,11 @@
 use super::{
-    connection::{CommandType, ConCommand, Connection, QueryCommand, RespCommand, MTU},
+    connection::{Connection, QueryId, MTU},
     krpc_message::{Nodes, ValuesOrNodes},
     routing_table::RoutingTable,
 };
 use crate::{
     client::{Peer, Peers, COMPACT_PEER_LEN},
-    data_structures::ID,
+    data_structures::{NoSizeBytes, ID},
     shutdown,
 };
 use anyhow::{anyhow, Result};
@@ -32,28 +32,33 @@ const FETCH_PEER_PARALLEL: usize = 3;
 #[derive(Debug)]
 pub enum DhtCommand {
     Touch(ID, SocketAddrV4),
-    NewNodes(Nodes),
-    NewPeers(Vec<Peer>, ID),
-    FindNode(ID, Bytes, SocketAddrV4),
-    GetPeers(ID, Bytes, SocketAddrV4),
+    NewNodes(Nodes, SocketAddrV4),
+    NewPeer(Peer, ID, SocketAddrV4),
+    GetPeersResp {
+        info_hash: ID,
+        from: SocketAddrV4,
+        token: NoSizeBytes,
+        resp: ValuesOrNodes,
+    },
+    FindNode(ID, QueryId),
+    GetPeers(ID, QueryId),
     FetchNodes,
     FetchPeers(ID),
 }
 
-pub fn start_dht(
-    peers: Peers,
-    info_hash: ID,
-    peer_with_dht: mpsc::Receiver<SocketAddrV4>,
-    shutdown_rx: shutdown::Receiver,
-) {
-    tokio::spawn(async move {
-        dht(peers, info_hash, peer_with_dht, shutdown_rx).await;
-    });
-}
+// pub fn start_dht(
+//     peers: Peers,
+//     info_hash: ID,
+//     peer_with_dht: mpsc::Receiver<SocketAddrV4>,
+//     shutdown_rx: shutdown::Receiver,
+// ) {
+//     tokio::spawn(async move {
+//         dht(peers, info_hash, peer_with_dht, shutdown_rx).await;
+//     });
+// }
 
-// TODO store routing table
 #[instrument(skip_all)]
-async fn dht(
+pub async fn dht(
     mut peers: Peers,
     info_hash: ID,
     mut peer_with_dht: mpsc::Receiver<SocketAddrV4>,
@@ -63,20 +68,17 @@ async fn dht(
         setup(&peers, info_hash).await;
 
     loop {
-        match select! {
+        if let Err(e) = select! {
             _ = shutdown_rx.recv() => {
-                debug!("shutdown");
                 routing_table.store().await;
                 return;
             }
             addr = peer_with_dht.recv() => {
-                debug!("new node from client {:?}", addr);
                 try_ping_node(&udp_connection, addr).await
             },
             command = dht_command_rx.recv() => process_incoming_command(command, &mut routing_table, &udp_connection, &mut peers, &mut peer_map).await,
         } {
-            Ok(_) => (),
-            Err(e) => error!("dht command failed. e = {:?}", e),
+            error!("dht command failed. e = {:?}", e);
         }
     }
 }
@@ -88,7 +90,7 @@ async fn setup(
     let routing_table = RoutingTable::new().await;
 
     let (dht_tx, dht_rx) = mpsc::channel(64);
-    let (conn_tx, conn_rx) = mpsc::channel(64);
+    let (conn_tx, conn_rx) = mpsc::channel(1 << 8);
 
     let udp_connection =
         Connection::new(*routing_table.own_id(), conn_tx, conn_rx, dht_tx.to_owned());
@@ -123,8 +125,6 @@ async fn process_incoming_command(
     let Some(command)  = command else{
         return Err(anyhow!("DhtCommand is None"));
     };
-
-    debug!("incoming command = {:?}", command);
 
     match command {
         DhtCommand::Touch(id, addr) => routing_table.touch_node(id, addr),
@@ -268,7 +268,6 @@ fn get_peers(
 }
 
 async fn try_ping_node(connection: &Connection, addr: Option<SocketAddrV4>) -> Result<()> {
-    debug!("try ping {:?}", addr);
     match addr {
         Some(addr) => {
             ping_node(connection, addr).await;
@@ -306,7 +305,6 @@ fn get_non_full_bucket_infos(routing_table: &mut RoutingTable) -> Vec<(ID, Socke
     let mut targets = Vec::new();
 
     for id in routing_table.iter_over_ids_within_fillable_buckets() {
-        debug!("fetch_nodes for {:?}", id);
         let node = match routing_table.find_node(&id) {
             Some(nodes) => match nodes.iter().next() {
                 Some(node) => node.to_owned(),
@@ -353,9 +351,8 @@ async fn periodically_fetch_nodes(dht_command_tx: mpsc::Sender<DhtCommand>) {
     let growth_formula = |x: u64| (9.0 + 0.001 * (x as f64).powf(2.4)) as u64;
 
     for i in 0..u64::MAX {
-        match dht_command_tx.send(DhtCommand::FetchNodes).await {
-            Ok(_) => debug!("fetch nodes"),
-            Err(e) => error!("periodical fetch nodes failed {:?}", e),
+        if let Err(e) = dht_command_tx.send(DhtCommand::FetchNodes).await {
+            error!("periodical fetch nodes failed {:?}", e);
         };
 
         let seconds_to_sleep = growth_formula(i);
@@ -373,12 +370,11 @@ async fn periodically_fetch_peers(dht_command_tx: mpsc::Sender<DhtCommand>, info
     let growth_formula = |x: u64| (5.0 + 0.000001 * (x as f64).powf(5.6)) as u64;
 
     for i in 0..u64::MAX {
-        match dht_command_tx
+        if let Err(e) = dht_command_tx
             .send(DhtCommand::FetchPeers(info_hash.to_owned()))
             .await
         {
-            Ok(_) => debug!("fetch peers"),
-            Err(e) => error!("periodical fetch peers failed {:?}", e),
+            error!("periodical fetch peers failed {:?}", e);
         };
 
         let seconds_to_sleep = growth_formula(i);

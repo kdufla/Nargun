@@ -1,7 +1,9 @@
 use crate::data_structures::ID;
-use crate::dht::krpc_message::{Message, Nodes, ValuesOrNodes};
+use crate::dht::dht_manager::DhtCommand;
+use crate::dht::krpc_message::{rand_tid, Message, Nodes, ValuesOrNodes};
 use bytes::Bytes;
 use std::net::SocketAddrV4;
+use tokio::sync::mpsc;
 
 #[derive(Debug)]
 pub struct ConCommand {
@@ -11,8 +13,14 @@ pub struct ConCommand {
 
 #[derive(Debug)]
 pub enum CommandType {
-    Query(QueryCommand),
-    Resp(RespCommand, Bytes),
+    Query {
+        command: QueryCommand,
+        resp_returner: mpsc::Sender<DhtCommand>,
+    },
+    Resp {
+        command: RespCommand,
+        tid: Bytes,
+    },
 }
 
 #[derive(Debug)]
@@ -47,35 +55,30 @@ impl ConCommand {
             target,
         }
     }
-
-    pub fn into_message(self, own_node_id: &ID, secret: &ID) -> Message {
-        match self.command_type {
-            CommandType::Query(query_command) => query_command.into_message(own_node_id),
-            CommandType::Resp(resp_command, transaction_id) => {
-                let token = secret.hash_as_bytes(&self.target.ip().octets());
-                resp_command.into_message(own_node_id, transaction_id, token)
-            }
-        }
-    }
 }
 
 impl QueryCommand {
-    fn into_message(self, own_node_id: &ID) -> Message {
+    pub fn into_message(self, own_node_id: &ID) -> Message {
+        let transaction_id = rand_tid();
         match self {
-            Self::Ping => Message::ping_query(own_node_id),
-            Self::FindNode { target } => Message::find_nodes_query(own_node_id, &target),
-            Self::GetPeers { info_hash } => Message::get_peers_query(own_node_id, &info_hash),
+            Self::Ping => Message::ping_query(own_node_id, transaction_id),
+            Self::FindNode { target } => {
+                Message::find_nodes_query(own_node_id, &target, transaction_id)
+            }
+            Self::GetPeers { info_hash } => {
+                Message::get_peers_query(own_node_id, &info_hash, transaction_id)
+            }
             Self::AnnouncePeer {
                 info_hash,
                 port,
                 token,
-            } => Message::announce_peer_query(own_node_id, &info_hash, port, token),
+            } => Message::announce_peer_query(own_node_id, &info_hash, port, token, transaction_id),
         }
     }
 }
 
 impl RespCommand {
-    fn into_message(self, own_node_id: &ID, transaction_id: Bytes, token: Bytes) -> Message {
+    pub fn into_message(self, own_node_id: &ID, transaction_id: Bytes, token: Bytes) -> Message {
         match self {
             RespCommand::Ping => Message::ping_resp(own_node_id, transaction_id),
             RespCommand::FindNode { nodes } => {
@@ -91,18 +94,18 @@ impl RespCommand {
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
+    use std::net::SocketAddrV4;
 
+    use super::QueryCommand;
     use crate::{
         data_structures::ID,
         dht::{
             connection::RespCommand,
-            krpc_message::{Message, Nodes},
+            krpc_message::{rand_tid, Message, Nodes},
             routing_table::Node,
         },
     };
-
-    use super::{CommandType, ConCommand, QueryCommand};
+    use bytes::Bytes;
 
     #[test]
     fn query_into_message() {
@@ -110,16 +113,13 @@ mod tests {
         let own_node_id = ID::new(rand::random());
         let secret = ID::new(rand::random());
 
-        let query_command = ConCommand::new(
-            CommandType::Query(QueryCommand::GetPeers {
-                info_hash: info_hash.to_owned(),
-            }),
-            "127.0.0.1:6969".parse().unwrap(),
-        );
+        let query_command = QueryCommand::GetPeers {
+            info_hash: info_hash.to_owned(),
+        };
 
-        let message = query_command.into_message(&own_node_id, &secret);
+        let message = query_command.into_message(&own_node_id);
 
-        let exp_message = Message::get_peers_query(&own_node_id, &info_hash);
+        let exp_message = Message::get_peers_query(&own_node_id, &info_hash, rand_tid());
 
         // transaction_id is going to be different
         assert_eq!(
@@ -138,17 +138,18 @@ mod tests {
             Node::from_compact_bytes("rdYAxWC9Zi!A97zKJUbH9HVcgP".as_bytes()).unwrap(),
         );
 
-        let resp_command = ConCommand::new(
-            CommandType::Resp(
-                RespCommand::FindNode {
-                    nodes: nodes.to_owned(),
-                },
-                tid.clone(),
-            ),
-            "127.0.0.1:6969".parse().unwrap(),
+        let resp_command = RespCommand::FindNode {
+            nodes: nodes.to_owned(),
+        };
+        let token = secret.hash_as_bytes(
+            &"127.0.0.1:6969"
+                .parse::<SocketAddrV4>()
+                .unwrap()
+                .ip()
+                .octets(),
         );
 
-        let message = resp_command.into_message(&own_node_id, &secret);
+        let message = resp_command.into_message(&own_node_id, tid, token);
 
         let exp_message = Message::find_nodes_resp(&own_node_id, nodes, tid);
 

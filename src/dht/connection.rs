@@ -1,180 +1,318 @@
 pub mod command;
+pub mod error;
 pub mod pending;
-pub use self::command::{CommandType, ConCommand, QueryCommand, RespCommand};
-pub use self::pending::{PendingRequests, RequestType};
-use super::dht::DhtCommand;
+
+use self::command::{CommandType, ConCommand, QueryCommand, RespCommand};
+use self::error::Error;
+use self::pending::{PendingRequests, RequestType};
+use super::dht_manager::DhtCommand;
 use super::krpc_message::{Arguments, Message, Nodes, Response, ValuesOrNodes};
-use super::routing_table::Node;
 use crate::client::Peer;
 use crate::data_structures::ID;
 use crate::gateway_device::LOCAL_PORT_UDP;
 use bytes::Bytes;
+use std::borrow::Borrow;
 use std::net::SocketAddr;
 use std::net::SocketAddrV4;
-use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::select;
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::SendError;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 pub const MTU: usize = 1300;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Connection {
-    own_id: ID,
-    conn_command_tx: mpsc::Sender<ConCommand>,
+    querying_connection: QueryingConnection,
+    send_message: mpsc::Sender<ConCommand>,
+    query_listener: mpsc::Receiver<DhtCommand>,
+}
+
+#[derive(Debug)]
+pub struct QueryingConnection {
+    send_message: mpsc::Sender<ConCommand>,
+    response_receiver_channel_rx: mpsc::Receiver<DhtCommand>,
+    response_receiver_channel_tx: mpsc::Sender<DhtCommand>,
+}
+
+#[derive(Debug)]
+pub struct QueryId {
+    target: SocketAddrV4,
+    transaction_id: Bytes,
+}
+
+pub enum NameForEnum {
+    Query(DhtCommand),
+    Resp(DhtCommand),
+}
+
+impl QueryingConnection {
+    pub async fn recv_resp(&mut self) -> Option<DhtCommand> {
+        self.response_receiver_channel_rx.recv().await
+    }
+
+    pub async fn send_ping(&self, target: SocketAddrV4) -> Result<(), Error> {
+        self.send_query(QueryCommand::Ping, target).await
+    }
+
+    pub async fn send_find_node(&self, node_id: ID, target: SocketAddrV4) -> Result<(), Error> {
+        self.send_query(QueryCommand::FindNode { target: node_id }, target)
+            .await
+    }
+
+    pub async fn send_get_peers(&self, info_hash: ID, target: SocketAddrV4) -> Result<(), Error> {
+        self.send_query(QueryCommand::GetPeers { info_hash }, target)
+            .await
+    }
+
+    pub async fn send_announce_peer(
+        &self,
+        info_hash: ID,
+        port: u16,
+        token: Bytes,
+        target: SocketAddrV4,
+    ) -> Result<(), Error> {
+        self.send_query(
+            QueryCommand::AnnouncePeer {
+                info_hash,
+                port,
+                token,
+            },
+            target,
+        )
+        .await
+    }
+
+    async fn send_query(
+        &self,
+        command_type: QueryCommand,
+        target: SocketAddrV4,
+    ) -> Result<(), Error> {
+        let command = ConCommand {
+            command_type: CommandType::Query {
+                command: command_type,
+                resp_returner: self.response_receiver_channel_tx.clone(),
+            },
+            target,
+        };
+
+        self.send_message
+            .send(command)
+            .await
+            .map_err(|e| Error::ConDropped {
+                source: Some(Box::new(e)),
+            })
+    }
+}
+
+impl Clone for QueryingConnection {
+    fn clone(&self) -> Self {
+        let (response_receiver_channel_tx, response_receiver_channel_rx) = mpsc::channel(1 << 6);
+        Self {
+            send_message: self.send_message.clone(),
+            response_receiver_channel_rx,
+            response_receiver_channel_tx,
+        }
+    }
 }
 
 impl Connection {
-    pub fn new(
-        own_id: ID,
-        conn_command_tx: mpsc::Sender<ConCommand>,
-        conn_command_rx: mpsc::Receiver<ConCommand>,
-        dht_command_tx: mpsc::Sender<DhtCommand>,
-    ) -> Self {
-        let rv = Self {
-            own_id,
-            conn_command_tx,
+    pub fn new(own_id: ID) -> Self {
+        let (send_to_remote_command_tx, send_to_remote_command_rx) = mpsc::channel(1 << 6);
+        let (response_receiver_channel_tx, response_receiver_channel_rx) = mpsc::channel(1 << 6);
+        let (query_listener_tx, query_listener_rx) = mpsc::channel(1 << 5);
+
+        let querying_connection = QueryingConnection {
+            send_message: send_to_remote_command_tx.clone(),
+            response_receiver_channel_rx,
+            response_receiver_channel_tx,
         };
-        let connection = rv.clone();
 
-        tokio::spawn(async move {
-            connection.manage_udp(conn_command_rx, dht_command_tx).await;
-        });
+        ConnectionManager::start(own_id, send_to_remote_command_rx, query_listener_tx);
 
-        rv
-    }
-
-    pub async fn send(&self, command: ConCommand) -> Result<(), SendError<ConCommand>> {
-        let res = self.conn_command_tx.send(command).await;
-        if let Err(e) = &res {
-            debug!("connection can't accept command. e = {:?}", e);
-        }
-        res
-    }
-
-    async fn manage_udp(
-        self,
-        conn_command_rx: mpsc::Receiver<ConCommand>,
-        dht_command_tx: mpsc::Sender<DhtCommand>,
-    ) {
-        let sock = UdpSocket::bind(format!("0.0.0.0:{LOCAL_PORT_UDP}"))
-            .await
-            .unwrap();
-
-        let secret = ID::new(rand::random());
-
-        let sock_send = Arc::new(sock);
-        let sock_recv = sock_send.clone();
-
-        let pending = PendingRequests::new();
-
-        select! {
-            _ = self.manage_sender(conn_command_rx, sock_send, secret, pending.clone()) => {},
-            _ = self.manage_receiver(sock_recv, dht_command_tx, secret, pending.clone()) => {},
-        }
-
-        error!("unreachable! select should not exit");
-    }
-
-    async fn manage_sender(
-        &self,
-        mut conn_command_rx: mpsc::Receiver<ConCommand>,
-        sock: Arc<UdpSocket>,
-        secret: ID,
-        mut pending: PendingRequests,
-    ) {
-        loop {
-            let Some(command) = conn_command_rx.recv().await else {break};
-            debug!(?command);
-
-            let target = command.target.to_owned();
-
-            let message: Message = command.into_message(&self.own_id, &secret);
-
-            if let Message::Query { transaction_id, .. } = &message {
-                pending.insert(transaction_id.as_bytes(), (&message).into());
-            }
-
-            debug!("send {:?}", message);
-
-            let message = match message.into_bytes() {
-                Ok(message) => message,
-                Err(e) => {
-                    error!(?e);
-                    continue;
-                }
-            };
-
-            let cloned_sock = sock.clone();
-            tokio::spawn(async move {
-                if let Err(e) = cloned_sock.send_to(&message, target).await {
-                    warn!(?e);
-                };
-            });
-        }
-    }
-
-    async fn manage_receiver(
-        &self,
-        sock: Arc<UdpSocket>,
-        dht_command_tx: mpsc::Sender<DhtCommand>,
-        secret: ID,
-        pending: PendingRequests,
-    ) {
-        let mut buf = [0u8; MTU];
-
-        let handler = ReceivedMessageHandler::new(
-            self.conn_command_tx.to_owned(),
-            dht_command_tx,
-            secret,
-            pending,
-        );
-
-        while let Ok((_, from_addr)) = sock.recv_from(&mut buf).await {
-            let message = match Message::from_bytes(&buf) {
-                Ok(message) => {
-                    debug!("rec {:?}", message);
-                    message
-                }
-                Err(e) => {
-                    error!("can't parse e = {:?}, buf = {:?}", e, buf);
-                    continue;
-                }
-            };
-
-            handler.handle_message(message, from_addr);
-        }
-    }
-}
-
-struct ReceivedMessageHandler {
-    conn_command_tx: mpsc::Sender<ConCommand>,
-    dht_command_tx: mpsc::Sender<DhtCommand>,
-    secret: ID,
-    pending: PendingRequests,
-}
-
-impl ReceivedMessageHandler {
-    fn new(
-        conn_command_tx: mpsc::Sender<ConCommand>,
-        dht_command_tx: mpsc::Sender<DhtCommand>,
-        secret: ID,
-        pending: PendingRequests,
-    ) -> Self {
         Self {
-            conn_command_tx,
-            dht_command_tx,
-            secret,
-            pending,
+            querying_connection,
+            send_message: send_to_remote_command_tx,
+            query_listener: query_listener_rx,
         }
     }
 
-    fn handle_message(&self, message: Message, from: SocketAddr) {
+    pub async fn recv(&mut self) -> Result<NameForEnum, Error> {
+        let Self {
+            querying_connection,
+            query_listener,
+            ..
+        } = self;
+
+        let x = tokio::select! {
+            com = querying_connection.recv_resp() => {
+                NameForEnum::Query(com.ok_or(Error::ConDropped { source: None })?)
+            }
+            com = query_listener.recv() => {
+                NameForEnum::Resp(com.ok_or(Error::ConDropped { source: None })?)
+            }
+        };
+
+        Ok(x)
+    }
+
+    pub async fn send_ping(&self, target: SocketAddrV4) -> Result<(), Error> {
+        self.querying_connection.send_ping(target).await
+    }
+
+    pub async fn send_find_node(&self, node_id: ID, target: SocketAddrV4) -> Result<(), Error> {
+        self.querying_connection
+            .send_find_node(node_id, target)
+            .await
+    }
+
+    pub async fn send_get_peers(&self, info_hash: ID, target: SocketAddrV4) -> Result<(), Error> {
+        self.querying_connection
+            .send_get_peers(info_hash, target)
+            .await
+    }
+
+    pub async fn send_announce_peer(
+        &self,
+        info_hash: ID,
+        port: u16,
+        token: Bytes,
+        target: SocketAddrV4,
+    ) -> Result<(), Error> {
+        self.querying_connection
+            .send_announce_peer(info_hash, port, token, target)
+            .await
+    }
+
+    pub async fn resp_to_find_node(&self, nodes: Nodes, query_id: QueryId) -> Result<(), Error> {
+        self.send_resp(RespCommand::FindNode { nodes }, query_id)
+            .await
+    }
+
+    pub async fn resp_to_get_peers(
+        &self,
+        values_or_nodes: ValuesOrNodes,
+        query_id: QueryId,
+    ) -> Result<(), Error> {
+        self.send_resp(RespCommand::GetPeers { values_or_nodes }, query_id)
+            .await
+    }
+
+    async fn send_resp(&self, command_type: RespCommand, query_id: QueryId) -> Result<(), Error> {
+        let command = ConCommand {
+            command_type: CommandType::Resp {
+                command: command_type,
+                tid: query_id.transaction_id,
+            },
+            target: query_id.target,
+        };
+
+        self.send_message
+            .send(command)
+            .await
+            .map_err(|e| Error::ConDropped {
+                source: Some(Box::new(e)),
+            })
+    }
+}
+
+struct ConnectionManager {
+    own_id: ID,
+    sock: UdpSocket,
+    send_to_remote: mpsc::Receiver<ConCommand>,
+    query_listener: mpsc::Sender<DhtCommand>,
+    pending: PendingRequests,
+    secret: ID,
+}
+
+impl ConnectionManager {
+    fn start(
+        own_id: ID,
+        send_to_remote: mpsc::Receiver<ConCommand>,
+        query_listener: mpsc::Sender<DhtCommand>,
+    ) {
+        tokio::spawn(async move {
+            let sock = UdpSocket::bind(format!("0.0.0.0:{LOCAL_PORT_UDP}"))
+                .await
+                .unwrap();
+
+            let manager = Self {
+                own_id,
+                sock,
+                send_to_remote,
+                query_listener,
+                pending: PendingRequests::new(),
+                secret: ID::new(rand::random()),
+            };
+
+            manager.manage_udp().await;
+        });
+    }
+
+    async fn manage_udp(mut self) -> Option<()> {
+        let mut buf = vec![0u8; MTU];
+
+        loop {
+            select! {
+                res = self.sock.recv_from(&mut buf) => {
+                    let (_ , from) = res.ok()?;
+                    self.handle_received_message(from, &buf);
+                },
+                send_command = self.send_to_remote.recv() => {
+                    self.send(send_command?);
+                },
+            }
+        }
+    }
+
+    async fn send(&mut self, command: ConCommand) {
+        let ConCommand {
+            command_type,
+            target,
+        } = command;
+
+        let message = match command_type {
+            CommandType::Query {
+                command,
+                resp_returner,
+            } => {
+                let message = command.into_message(&self.own_id);
+                self.pending
+                    .insert(message.tid().as_bytes(), (&message).into(), resp_returner);
+
+                message
+            }
+            CommandType::Resp { command, tid } => {
+                let token = self.secret.hash_as_bytes(&target.ip().octets());
+                command.into_message(&self.own_id, tid, token)
+            }
+        };
+
+        let message = match message.into_bytes() {
+            Ok(message) => message,
+            Err(e) => {
+                error!(?e);
+                return;
+            }
+        };
+
+        if let Err(e) = self.sock.send_to(&message, target).await {
+            warn!(?e);
+        };
+    }
+
+    async fn handle_received_message(&mut self, from: SocketAddr, buf: &[u8]) {
         let  SocketAddr::V4(from) = from else {
             info!("IPv6 request dropped");
             return;
+        };
+
+        let message = match Message::from_bytes(&buf) {
+            Ok(message) => message,
+            Err(e) => {
+                error!("can't parse e = {:?}, buf = {:?}", e, buf);
+                return;
+            }
         };
 
         match message {
@@ -182,29 +320,55 @@ impl ReceivedMessageHandler {
                 transaction_id,
                 arguments,
                 ..
-            } => self.handle_query(transaction_id.into_bytes(), arguments, from),
+            } => {
+                self.handle_query(transaction_id.into_bytes(), arguments, from)
+                    .await
+            }
             Message::Response {
                 transaction_id,
                 response,
                 ..
-            } => self.handle_resp(transaction_id.into_bytes(), response, from),
-            Message::Error { .. } => todo!(),
+            } => {
+                self.handle_resp(transaction_id.into_bytes(), response, from)
+                    .await
+            }
+            Message::Error { .. } => (),
         }
     }
 
-    fn handle_query(&self, transaction_id: Bytes, arguments: Arguments, from: SocketAddrV4) {
+    async fn handle_query(
+        &mut self,
+        transaction_id: Bytes,
+        arguments: Arguments,
+        from: SocketAddrV4,
+    ) {
         match arguments {
             Arguments::Ping { .. } => {
-                self.conn_send(ConCommand::new(
-                    CommandType::Resp(RespCommand::Ping, transaction_id),
+                self.send(ConCommand::new(
+                    CommandType::Resp {
+                        command: RespCommand::Ping,
+                        tid: transaction_id,
+                    },
                     from,
                 ));
             }
             Arguments::FindNode { target, .. } => {
-                self.dht_send(DhtCommand::FindNode(target, transaction_id, from));
+                self.query_listener.send(DhtCommand::FindNode(
+                    target,
+                    QueryId {
+                        target: from,
+                        transaction_id,
+                    },
+                ));
             }
             Arguments::GetPeers { info_hash, .. } => {
-                self.dht_send(DhtCommand::GetPeers(info_hash, transaction_id, from));
+                self.query_listener.send(DhtCommand::GetPeers(
+                    info_hash,
+                    QueryId {
+                        target: from,
+                        transaction_id,
+                    },
+                ));
             }
             Arguments::AnnouncePeer {
                 id,
@@ -214,10 +378,13 @@ impl ReceivedMessageHandler {
             } => {
                 if self.token_is_valid(token.into_bytes(), &from) {
                     self.store_node(from.to_owned(), port, info_hash, id);
-                    self.conn_send(ConCommand::new(
-                        CommandType::Resp(RespCommand::AnnouncePeer, transaction_id),
+                    self.send(ConCommand::new(
+                        CommandType::Resp {
+                            command: RespCommand::AnnouncePeer,
+                            tid: transaction_id,
+                        },
                         from,
-                    ))
+                    ));
                 }
             }
         }
@@ -230,75 +397,47 @@ impl ReceivedMessageHandler {
     fn store_node(&self, from: SocketAddrV4, peer_port: u16, info_hash: ID, id: ID) {
         let mut peer_addr = from;
         peer_addr.set_port(peer_port);
-        let peer = Peer::new(peer_addr);
 
-        self.dht_send(DhtCommand::NewPeers(vec![peer], info_hash));
-
-        self.dht_send(DhtCommand::NewNodes(Nodes::Exact(Node::new_good(id, from))));
+        self.query_listener
+            .send(DhtCommand::NewPeer(Peer::new(peer_addr), info_hash, from));
     }
 
-    fn handle_resp(&self, transaction_id: Bytes, response: Response, from: SocketAddrV4) {
-        let Some(pending_request) = self.pending.get(&transaction_id) else {
-            warn!("resp from an unknown node");
+    async fn handle_resp(&self, transaction_id: Bytes, response: Response, from: SocketAddrV4) {
+        let Some((requested_type, querying_task_channel)) =
+            self.pending.get(&transaction_id, response.borrow().into())
+        else {
+            warn!("resp not pending");
             return;
         };
 
-        let response_type: RequestType = (&response).into();
-        if std::mem::discriminant(&pending_request) != std::mem::discriminant(&response_type) {
-            warn!("resp on pending req has different type");
-            return;
-        }
-
         match response {
             Response::Ping { id } => {
-                self.dht_send(DhtCommand::Touch(id, from));
+                querying_task_channel.send(DhtCommand::Touch(id, from));
             }
             Response::FindNode { id, nodes } => {
-                self.dht_send(DhtCommand::Touch(id, from));
-                self.dht_send(DhtCommand::NewNodes(nodes));
+                querying_task_channel.send(DhtCommand::NewNodes(nodes, from));
             }
             Response::GetPeers {
                 id,
                 values_or_nodes,
-                ..
+                token,
             } => {
-                // TODO token
-                let RequestType::GetPeers(info_hash) = pending_request else {
+                let RequestType::GetPeers(info_hash) = requested_type else {
                     return;
                 };
 
-                self.dht_send(DhtCommand::Touch(id, from));
-
-                match values_or_nodes {
-                    ValuesOrNodes::Values { values } => {
-                        self.dht_send(DhtCommand::NewPeers(values, info_hash));
-                    }
-                    ValuesOrNodes::Nodes { nodes } => {
-                        self.dht_send(DhtCommand::NewNodes(nodes));
-                    }
-                }
+                querying_task_channel
+                    .send(DhtCommand::GetPeersResp {
+                        from,
+                        info_hash,
+                        token,
+                        resp: values_or_nodes,
+                    })
+                    .await;
             }
             Response::AnnouncePeer { id } => {
-                self.dht_send(DhtCommand::Touch(id, from));
+                querying_task_channel.send(DhtCommand::Touch(id, from));
             }
         }
-    }
-
-    fn conn_send(&self, command: ConCommand) {
-        let cloned_tx = self.conn_command_tx.clone();
-        tokio::spawn(async move {
-            if let Err(e) = cloned_tx.send(command).await {
-                warn!(?e);
-            };
-        });
-    }
-
-    fn dht_send(&self, command: DhtCommand) {
-        let cloned_tx = self.dht_command_tx.clone();
-        tokio::spawn(async move {
-            if let Err(e) = cloned_tx.send(command).await {
-                warn!(?e);
-            };
-        });
     }
 }

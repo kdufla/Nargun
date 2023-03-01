@@ -325,9 +325,6 @@ mod tests {
 
         let (zero, one) = bucket.split();
 
-        debug!(?zero);
-        debug!(?one);
-
         assert_eq!(4, zero.iter_over_goods().count());
         assert_eq!(4, zero._count_empty());
 

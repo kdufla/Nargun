@@ -9,6 +9,8 @@ use bytes::Bytes;
 use serde::{de::Unexpected, Deserialize, Deserializer, Serialize, Serializer};
 use std::str;
 
+const MY_TID_LEN: usize = 5;
+
 // TODO fuck bendy! it's the worst decision I've made. I need to impl my own parser for serde.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
@@ -104,7 +106,10 @@ pub enum Nodes {
     Closest(Vec<Node>),
 }
 
-pub type Tid = [u8; 5];
+#[inline(always)]
+pub fn rand_tid() -> NoSizeBytes {
+    NoSizeBytes::new(Bytes::from(Vec::from(rand::random::<[u8; MY_TID_LEN]>())))
+}
 
 // TODO I'm not a fan of these boilerplate methods. I'm not sure if it's bad, but you can think about it.
 impl Message {
@@ -116,9 +121,17 @@ impl Message {
         bendy::serde::from_bytes::<Self>(buf).map_err(|e| anyhow!("{}", e))
     }
 
-    pub fn ping_query(id: &ID) -> Self {
+    pub fn tid(&self) -> &NoSizeBytes {
+        match self {
+            Message::Query { transaction_id, .. } => transaction_id,
+            Message::Response { transaction_id, .. } => transaction_id,
+            Message::Error { transaction_id, .. } => transaction_id,
+        }
+    }
+
+    pub fn ping_query(id: &ID, transaction_id: NoSizeBytes) -> Self {
         Self::Query {
-            transaction_id: NoSizeBytes::new(Bytes::from(Vec::from(rand::random::<Tid>()))),
+            transaction_id,
             msg_type: MessageType(b'q'),
             method_name: "ping".to_string(),
             arguments: Arguments::Ping { id: id.to_owned() },
@@ -133,9 +146,9 @@ impl Message {
         }
     }
 
-    pub fn find_nodes_query(id: &ID, target: &ID) -> Self {
+    pub fn find_nodes_query(id: &ID, target: &ID, transaction_id: NoSizeBytes) -> Self {
         Self::Query {
-            transaction_id: NoSizeBytes::new(Bytes::from(Vec::from(rand::random::<Tid>()))),
+            transaction_id,
             msg_type: MessageType(b'q'),
             method_name: "find_node".to_string(),
             arguments: Arguments::FindNode {
@@ -153,9 +166,9 @@ impl Message {
         }
     }
 
-    pub fn get_peers_query(id: &ID, info_hash: &ID) -> Self {
+    pub fn get_peers_query(id: &ID, info_hash: &ID, transaction_id: NoSizeBytes) -> Self {
         Self::Query {
-            transaction_id: NoSizeBytes::new(Bytes::from(Vec::from(rand::random::<Tid>()))),
+            transaction_id,
             msg_type: MessageType(b'q'),
             method_name: "get_peers".to_string(),
             arguments: Arguments::GetPeers {
@@ -182,9 +195,15 @@ impl Message {
         }
     }
 
-    pub fn announce_peer_query(id: &ID, info_hash: &ID, port: u16, token: Bytes) -> Self {
+    pub fn announce_peer_query(
+        id: &ID,
+        info_hash: &ID,
+        port: u16,
+        token: Bytes,
+        transaction_id: NoSizeBytes,
+    ) -> Self {
         Self::Query {
-            transaction_id: NoSizeBytes::new(Bytes::from(Vec::from(rand::random::<Tid>()))),
+            transaction_id,
             msg_type: MessageType(b'q'),
             method_name: "announce_peer".to_string(),
             arguments: Arguments::AnnouncePeer {
@@ -419,7 +438,7 @@ mod krpc_tests {
             client::Peer,
             data_structures::ID,
             dht::{
-                krpc_message::{Error, Nodes, ValuesOrNodes},
+                krpc_message::{rand_tid, Error, Nodes, ValuesOrNodes},
                 routing_table::Node,
             },
         };
@@ -427,7 +446,8 @@ mod krpc_tests {
 
         #[test]
         fn ping_query() {
-            let message = Message::ping_query(&ID::new(b"abcdefghij0123456789".to_owned()));
+            let message =
+                Message::ping_query(&ID::new(b"abcdefghij0123456789".to_owned()), rand_tid());
 
             let tid = match &message {
                 Message::Query { transaction_id, .. } => transaction_id.as_bytes(),
@@ -458,6 +478,7 @@ mod krpc_tests {
             let message = Message::find_nodes_query(
                 &ID::new(b"abcdefghij0123456789".to_owned()),
                 &ID::new(b"mnopqrstuvwxyz123456".to_owned()),
+                rand_tid(),
             );
 
             let tid = match &message {
@@ -511,6 +532,7 @@ mod krpc_tests {
             let message = Message::get_peers_query(
                 &ID::new(b"abcdefghij0123456789".to_owned()),
                 &ID::new(b"mnopqrstuvwxyz123456".to_owned()),
+                rand_tid(),
             );
 
             let tid = match &message {
@@ -581,6 +603,7 @@ mod krpc_tests {
                 &ID::new(b"mnopqrstuvwxyz123456".to_owned()),
                 6881,
                 Bytes::from_static(b"aoeusnth"),
+                rand_tid(),
             );
 
             let tid = match &message {
