@@ -1,5 +1,5 @@
+use super::Resp;
 use crate::data_structures::ID;
-use crate::dht::dht_manager::DhtCommand;
 use crate::dht::krpc_message::{rand_tid, Message, Nodes, ValuesOrNodes};
 use bytes::Bytes;
 use std::net::SocketAddrV4;
@@ -15,7 +15,7 @@ pub struct ConCommand {
 pub enum CommandType {
     Query {
         command: QueryCommand,
-        resp_returner: mpsc::Sender<DhtCommand>,
+        resp_returner: mpsc::Sender<Resp>,
     },
     Resp {
         command: RespCommand,
@@ -149,7 +149,7 @@ mod tests {
                 .octets(),
         );
 
-        let message = resp_command.into_message(&own_node_id, tid, token);
+        let message = resp_command.into_message(&own_node_id, tid.clone(), token);
 
         let exp_message = Message::find_nodes_resp(&own_node_id, nodes, tid);
 

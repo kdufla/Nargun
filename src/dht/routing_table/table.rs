@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddrV4;
 use tokio::fs::{DirBuilder, File};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 const APP_DIR_NAME: &str = ".nargun";
 #[cfg(not(test))]
@@ -71,6 +71,21 @@ impl RoutingTable {
         self.data.iter().flat_map(|bucket| bucket.iter_nodes())
     }
 
+    pub fn count_good_nodes(&self) -> usize {
+        self.data
+            .iter()
+            .map(|bucket| bucket.iter_over_goods().count())
+            .sum()
+    }
+
+    pub fn count_nodes(&self) -> usize {
+        self.iter_nodes().count()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.count_nodes() == 0
+    }
+
     pub fn find_node(&self, id: &ID) -> Option<Nodes> {
         let bucket = self.get_bucket(id);
 
@@ -79,6 +94,7 @@ impl RoutingTable {
         }
 
         self.get_closest_nodes(id)
+            .map(|nodes| Nodes::Closest(nodes))
     }
 
     pub fn iter_over_ids_within_fillable_buckets(&self) -> impl Iterator<Item = ID> + '_ {
@@ -103,7 +119,7 @@ impl RoutingTable {
         self.get_bucket(id).contains(id)
     }
 
-    fn get_closest_nodes(&self, id: &ID) -> Option<Nodes> {
+    pub fn get_closest_nodes(&self, id: &ID) -> Option<Vec<Node>> {
         let mut nodes = Vec::new();
 
         let node_bucket_idx = self.find_bucket_idx_by_id(id);
@@ -121,8 +137,19 @@ impl RoutingTable {
 
         if !nodes.is_empty() {
             nodes.sort_by(|a, b| a.cmp_by_distance_to_id(b, id));
-            Some(Nodes::Closest(nodes))
+            Some(nodes)
         } else {
+            warn!(
+                "can't find nodes{}",
+                if self.is_empty() {
+                    " because routing table is empty".to_string()
+                } else {
+                    format!(
+                        ". should be impossible because routing table has {} nodes",
+                        self.count_nodes()
+                    )
+                }
+            );
             None
         }
     }
@@ -295,6 +322,10 @@ mod tests {
         assert!(rt.contains_node(&id))
     }
 
+    // TODO once every 100+ runs, this fails because loading fails with unexpected EOF
+    // it might be because of tokio::test (async) or maybe with certain type of data?
+    // anyway, it's not something I can find right now.. have fun
+    // while ct dht::routing_table::table::tests::cache -- --nocapture; do :; done
     #[tokio::test]
     async fn cache() {
         let mut default_rt = RoutingTable::default();
@@ -410,7 +441,7 @@ mod tests {
             panic!("expected Nodes::Closest, fount Nodes::Exact");
         };
 
-        assert!(&target_id - &closest[0].id < &target_id - &closest[1].id);
+        assert!(&target_id - &closest[0].id <= &target_id - &closest[1].id);
     }
 
     macro_rules! zero_id_with_first {

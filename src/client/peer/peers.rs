@@ -28,6 +28,10 @@ impl Peers {
         }
     }
 
+    pub fn insert(&self, peer: Peer) {
+        self.data.lock().unwrap().insert(peer, Status::Unknown);
+    }
+
     // TODO this name is bad. `peers.serve(info_hash)` is clear but only seeing it here is laughably bad.
     pub fn serve(&self, info_hash: &ID) -> bool {
         *info_hash == self.info_hash
@@ -35,6 +39,25 @@ impl Peers {
 
     pub fn peer_addresses(&self) -> Vec<Peer> {
         self.data.lock().unwrap().keys().cloned().collect()
+    }
+
+    pub fn get_good_peers(&self, limit: usize) -> Option<Vec<Peer>> {
+        let status_priority_order = [
+            Status::Active,
+            Status::NoUsefulPieces,
+            Status::Unknown,
+            Status::ChokedForTooLong,
+        ];
+
+        let mut data = self.data.lock().unwrap();
+
+        let peers = self.activate_peers_in_locked_data(&mut data, limit, &status_priority_order);
+
+        if peers.is_empty() {
+            None
+        } else {
+            Some(peers)
+        }
     }
 
     // I know this name/function is shit but I don't want to block peers more than it's necessary

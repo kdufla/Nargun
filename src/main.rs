@@ -12,15 +12,13 @@ use anyhow::Result;
 use client::{start_client, Peers};
 use data_structures::ID;
 use dht::start_dht;
-use std::{
-    sync::{atomic::AtomicU64, Arc},
-};
+use std::sync::{atomic::AtomicU64, Arc};
 use tokio::{
     signal,
     sync::{broadcast, mpsc},
 };
-use tracing::{info};
-use transcoding::metainfo::{Torrent};
+use tracing::info;
+use transcoding::metainfo::Torrent;
 
 // comments
 // because
@@ -64,26 +62,28 @@ async fn main() -> Result<()> {
     let peers = Peers::new(&torrent.info_hash);
     let (tcp_port, _udp_port) = gateway_device::open_any_port()?;
     let (dht_tx, dht_rx) = mpsc::channel(1 << 5);
-    let (that_unknown_tx, _rx) = broadcast::channel(1 << 5);
+    // let (that_unknown_tx, _rx) = broadcast::channel(1 << 5);
     let pieces_downloaded = Arc::new(AtomicU64::new(0));
 
     start_dht(
+        tcp_port,
         peers.to_owned(),
         torrent.info_hash,
         dht_rx,
         shutdown_rx.clone(),
-    );
+    )
+    .await;
 
-    start_client(
-        client_id,
-        peers,
-        dht_tx,
-        torrent,
-        pieces_downloaded,
-        &that_unknown_tx,
-        tcp_port,
-        shutdown_rx.clone(),
-    );
+    // start_client(
+    //     client_id,
+    //     peers,
+    //     dht_tx,
+    //     torrent,
+    //     pieces_downloaded,
+    //     &that_unknown_tx,
+    //     tcp_port,
+    //     shutdown_rx.clone(),
+    // );
     // let _ = fs::FS::new("base_dir".to_string(), &torrent.info).await;
 
     // if let Mode::Multi { files } = &torrent.info.mode {

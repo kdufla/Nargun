@@ -17,12 +17,18 @@ pub struct Bucket {
     data: [Option<Node>; K_NODE_PER_BUCKET],
 }
 
-#[derive(Eq, Clone, Deserialize, Serialize)]
+#[derive(Eq, Clone, Deserialize, Serialize, PartialOrd)]
 pub struct Node {
     pub id: ID,
     pub addr: SocketAddrV4,
     #[serde(skip)]
     last_seen: Option<Instant>,
+}
+
+impl Ord for Node {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.id.cmp(&other.id)
+    }
 }
 
 impl Bucket {
@@ -190,6 +196,10 @@ impl Node {
 
     fn eq_by_id(&self, id: &ID) -> bool {
         self.id == *id
+    }
+
+    pub fn cmp_by_id(&self, id: &ID) -> Ordering {
+        self.id.cmp(id)
     }
 
     pub fn cmp_by_distance_to_id(&self, other: &Self, id: &ID) -> Ordering {

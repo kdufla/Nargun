@@ -4,11 +4,10 @@ pub mod pending;
 
 use self::command::{CommandType, ConCommand, QueryCommand, RespCommand};
 use self::error::Error;
-use self::pending::{PendingRequests, RequestType};
-use super::dht_manager::DhtCommand;
+use self::pending::PendingRequests;
 use super::krpc_message::{Arguments, Message, Nodes, Response, ValuesOrNodes};
 use crate::client::Peer;
-use crate::data_structures::ID;
+use crate::data_structures::{NoSizeBytes, ID};
 use crate::gateway_device::LOCAL_PORT_UDP;
 use bytes::Bytes;
 use std::borrow::Borrow;
@@ -17,7 +16,7 @@ use std::net::SocketAddrV4;
 use tokio::net::UdpSocket;
 use tokio::select;
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 pub const MTU: usize = 1300;
 
@@ -25,14 +24,14 @@ pub const MTU: usize = 1300;
 pub struct Connection {
     querying_connection: QueryingConnection,
     send_message: mpsc::Sender<ConCommand>,
-    query_listener: mpsc::Receiver<DhtCommand>,
+    query_listener: mpsc::Receiver<Query>,
 }
 
 #[derive(Debug)]
 pub struct QueryingConnection {
     send_message: mpsc::Sender<ConCommand>,
-    response_receiver_channel_rx: mpsc::Receiver<DhtCommand>,
-    response_receiver_channel_tx: mpsc::Sender<DhtCommand>,
+    response_receiver_channel_rx: mpsc::Receiver<Resp>,
+    response_receiver_channel_tx: mpsc::Sender<Resp>,
 }
 
 #[derive(Debug)]
@@ -41,14 +40,42 @@ pub struct QueryId {
     transaction_id: Bytes,
 }
 
-pub enum NameForEnum {
-    Query(DhtCommand),
-    Resp(DhtCommand),
+#[derive(Debug)]
+pub enum ConMsg {
+    Query(Query),
+    Resp(Resp),
+}
+
+#[derive(Debug)]
+pub enum Query {
+    FindNode { target: ID, query_id: QueryId },
+    GetPeers { info_hash: ID, query_id: QueryId },
+    NewPeer { new_peer: Peer, info_hash: ID },
+}
+
+#[derive(Debug)]
+pub enum Resp {
+    Touch {
+        id: ID,
+        from: SocketAddrV4,
+    },
+    NewNodes {
+        nodes: Nodes,
+        from: SocketAddrV4,
+        id: ID,
+    },
+    GetPeersResp {
+        from: SocketAddrV4,
+        token: NoSizeBytes,
+        v_or_n: ValuesOrNodes,
+    },
 }
 
 impl QueryingConnection {
-    pub async fn recv_resp(&mut self) -> Option<DhtCommand> {
-        self.response_receiver_channel_rx.recv().await
+    pub async fn recv_resp(&mut self) -> Resp {
+        // unwrap because one sender is always alive in Self i.e. even if connection dies, this will continue waiting
+        // it's not a problem since this is just a limited cloneable part of connection
+        self.response_receiver_channel_rx.recv().await.unwrap()
     }
 
     pub async fn send_ping(&self, target: SocketAddrV4) -> Result<(), Error> {
@@ -118,9 +145,9 @@ impl Clone for QueryingConnection {
 
 impl Connection {
     pub fn new(own_id: ID) -> Self {
-        let (send_to_remote_command_tx, send_to_remote_command_rx) = mpsc::channel(1 << 6);
-        let (response_receiver_channel_tx, response_receiver_channel_rx) = mpsc::channel(1 << 6);
-        let (query_listener_tx, query_listener_rx) = mpsc::channel(1 << 5);
+        let (send_to_remote_command_tx, send_to_remote_command_rx) = mpsc::channel(1 << 10);
+        let (response_receiver_channel_tx, response_receiver_channel_rx) = mpsc::channel(1 << 10);
+        let (query_listener_tx, query_listener_rx) = mpsc::channel(1 << 8);
 
         let querying_connection = QueryingConnection {
             send_message: send_to_remote_command_tx.clone(),
@@ -137,23 +164,25 @@ impl Connection {
         }
     }
 
-    pub async fn recv(&mut self) -> Result<NameForEnum, Error> {
+    pub fn get_querying_connection(&self) -> QueryingConnection {
+        self.querying_connection.clone()
+    }
+
+    pub async fn recv(&mut self) -> Result<ConMsg, Error> {
         let Self {
             querying_connection,
             query_listener,
             ..
         } = self;
 
-        let x = tokio::select! {
-            com = querying_connection.recv_resp() => {
-                NameForEnum::Query(com.ok_or(Error::ConDropped { source: None })?)
-            }
-            com = query_listener.recv() => {
-                NameForEnum::Resp(com.ok_or(Error::ConDropped { source: None })?)
+        let msg = tokio::select! {
+            resp = querying_connection.recv_resp() => ConMsg::Resp(resp),
+            query = query_listener.recv() => {
+                ConMsg::Query(query.ok_or(Error::ConDropped { source: None })?)
             }
         };
 
-        Ok(x)
+        Ok(msg)
     }
 
     pub async fn send_ping(&self, target: SocketAddrV4) -> Result<(), Error> {
@@ -166,23 +195,6 @@ impl Connection {
             .await
     }
 
-    pub async fn send_get_peers(&self, info_hash: ID, target: SocketAddrV4) -> Result<(), Error> {
-        self.querying_connection
-            .send_get_peers(info_hash, target)
-            .await
-    }
-
-    pub async fn send_announce_peer(
-        &self,
-        info_hash: ID,
-        port: u16,
-        token: Bytes,
-        target: SocketAddrV4,
-    ) -> Result<(), Error> {
-        self.querying_connection
-            .send_announce_peer(info_hash, port, token, target)
-            .await
-    }
 
     pub async fn resp_to_find_node(&self, nodes: Nodes, query_id: QueryId) -> Result<(), Error> {
         self.send_resp(RespCommand::FindNode { nodes }, query_id)
@@ -220,7 +232,7 @@ struct ConnectionManager {
     own_id: ID,
     sock: UdpSocket,
     send_to_remote: mpsc::Receiver<ConCommand>,
-    query_listener: mpsc::Sender<DhtCommand>,
+    query_listener: mpsc::Sender<Query>,
     pending: PendingRequests,
     secret: ID,
 }
@@ -229,7 +241,7 @@ impl ConnectionManager {
     fn start(
         own_id: ID,
         send_to_remote: mpsc::Receiver<ConCommand>,
-        query_listener: mpsc::Sender<DhtCommand>,
+        query_listener: mpsc::Sender<Query>,
     ) {
         tokio::spawn(async move {
             let sock = UdpSocket::bind(format!("0.0.0.0:{LOCAL_PORT_UDP}"))
@@ -249,6 +261,7 @@ impl ConnectionManager {
         });
     }
 
+    #[instrument(skip_all)]
     async fn manage_udp(mut self) -> Option<()> {
         let mut buf = vec![0u8; MTU];
 
@@ -256,10 +269,10 @@ impl ConnectionManager {
             select! {
                 res = self.sock.recv_from(&mut buf) => {
                     let (_ , from) = res.ok()?;
-                    self.handle_received_message(from, &buf);
+                    self.handle_received_message(from, &buf).await;
                 },
                 send_command = self.send_to_remote.recv() => {
-                    self.send(send_command?);
+                    self.send(send_command?).await;
                 },
             }
         }
@@ -270,6 +283,8 @@ impl ConnectionManager {
             command_type,
             target,
         } = command;
+
+        debug!(?command_type);
 
         let message = match command_type {
             CommandType::Query {
@@ -315,6 +330,8 @@ impl ConnectionManager {
             }
         };
 
+        debug!(?message);
+
         match message {
             Message::Query {
                 transaction_id,
@@ -350,41 +367,59 @@ impl ConnectionManager {
                         tid: transaction_id,
                     },
                     from,
-                ));
+                ))
+                .await;
             }
             Arguments::FindNode { target, .. } => {
-                self.query_listener.send(DhtCommand::FindNode(
-                    target,
-                    QueryId {
-                        target: from,
-                        transaction_id,
-                    },
-                ));
+                self.query_listener
+                    .send(Query::FindNode {
+                        target,
+                        query_id: QueryId {
+                            target: from,
+                            transaction_id,
+                        },
+                    })
+                    .await
+                    .unwrap();
             }
             Arguments::GetPeers { info_hash, .. } => {
-                self.query_listener.send(DhtCommand::GetPeers(
-                    info_hash,
-                    QueryId {
-                        target: from,
-                        transaction_id,
-                    },
-                ));
+                self.query_listener
+                    .send(Query::GetPeers {
+                        info_hash,
+                        query_id: QueryId {
+                            target: from,
+                            transaction_id,
+                        },
+                    })
+                    .await
+                    .unwrap();
             }
             Arguments::AnnouncePeer {
-                id,
                 info_hash,
                 port,
                 token,
+                ..
             } => {
                 if self.token_is_valid(token.into_bytes(), &from) {
-                    self.store_node(from.to_owned(), port, info_hash, id);
+                    let mut peer_addr = from;
+                    peer_addr.set_port(port);
+
+                    self.query_listener
+                        .send(Query::NewPeer {
+                            new_peer: Peer::new(peer_addr),
+                            info_hash,
+                        })
+                        .await
+                        .unwrap();
+
                     self.send(ConCommand::new(
                         CommandType::Resp {
                             command: RespCommand::AnnouncePeer,
                             tid: transaction_id,
                         },
                         from,
-                    ));
+                    ))
+                    .await;
                 }
             }
         }
@@ -394,16 +429,8 @@ impl ConnectionManager {
         token == self.secret.hash_as_bytes(&source_addr.ip().octets())
     }
 
-    fn store_node(&self, from: SocketAddrV4, peer_port: u16, info_hash: ID, id: ID) {
-        let mut peer_addr = from;
-        peer_addr.set_port(peer_port);
-
-        self.query_listener
-            .send(DhtCommand::NewPeer(Peer::new(peer_addr), info_hash, from));
-    }
-
-    async fn handle_resp(&self, transaction_id: Bytes, response: Response, from: SocketAddrV4) {
-        let Some((requested_type, querying_task_channel)) =
+    async fn handle_resp(&mut self, transaction_id: Bytes, response: Response, from: SocketAddrV4) {
+        let Some(querying_task_channel) =
             self.pending.get(&transaction_id, response.borrow().into())
         else {
             warn!("resp not pending");
@@ -412,31 +439,36 @@ impl ConnectionManager {
 
         match response {
             Response::Ping { id } => {
-                querying_task_channel.send(DhtCommand::Touch(id, from));
+                querying_task_channel
+                    .send(Resp::Touch { id, from })
+                    .await
+                    .unwrap();
             }
-            Response::FindNode { id, nodes } => {
-                querying_task_channel.send(DhtCommand::NewNodes(nodes, from));
+            Response::FindNode { nodes, id } => {
+                querying_task_channel
+                    .send(Resp::NewNodes { nodes, from, id })
+                    .await
+                    .unwrap();
             }
             Response::GetPeers {
-                id,
                 values_or_nodes,
                 token,
+                ..
             } => {
-                let RequestType::GetPeers(info_hash) = requested_type else {
-                    return;
-                };
-
                 querying_task_channel
-                    .send(DhtCommand::GetPeersResp {
+                    .send(Resp::GetPeersResp {
                         from,
-                        info_hash,
                         token,
-                        resp: values_or_nodes,
+                        v_or_n: values_or_nodes,
                     })
-                    .await;
+                    .await
+                    .unwrap();
             }
             Response::AnnouncePeer { id } => {
-                querying_task_channel.send(DhtCommand::Touch(id, from));
+                querying_task_channel
+                    .send(Resp::Touch { id, from })
+                    .await
+                    .unwrap();
             }
         }
     }

@@ -1,389 +1,439 @@
 use super::{
-    connection::{Connection, QueryId, MTU},
+    connection::{
+        error::Error as ConError, ConMsg, Connection, Query, QueryId, QueryingConnection, Resp, MTU,
+    },
     krpc_message::{Nodes, ValuesOrNodes},
-    routing_table::RoutingTable,
+    routing_table::{Node, RoutingTable},
 };
 use crate::{
     client::{Peer, Peers, COMPACT_PEER_LEN},
     data_structures::{NoSizeBytes, ID},
     shutdown,
 };
-use anyhow::{anyhow, Result};
-use bytes::Bytes;
+use anyhow::anyhow;
 use rand::{seq::IteratorRandom, thread_rng};
 use std::{
+    cmp::Ordering,
     collections::{hash_map, HashMap, HashSet},
     net::SocketAddrV4,
     time::Duration,
 };
-use tokio::{
-    select,
-    sync::mpsc::{self, Receiver},
-    time::sleep,
-};
+use tokio::{select, sync::mpsc, time::sleep};
 use tracing::{debug, error, instrument, warn};
 
 type PeerMap = HashMap<ID, HashSet<Peer>>;
 
 const MAX_NODE_FETCH_SLEEP: u64 = 60;
-const MAX_PEER_FETCH_SLEEP: u64 = 180;
-const FETCH_PEER_PARALLEL: usize = 3;
+const MAX_SECS_INTERVAL_BETWEEN_PEER_FETCHES: u64 = 120;
 
-#[derive(Debug)]
-pub enum DhtCommand {
-    Touch(ID, SocketAddrV4),
-    NewNodes(Nodes, SocketAddrV4),
-    NewPeer(Peer, ID, SocketAddrV4),
-    GetPeersResp {
-        info_hash: ID,
-        from: SocketAddrV4,
-        token: NoSizeBytes,
-        resp: ValuesOrNodes,
-    },
-    FindNode(ID, QueryId),
-    GetPeers(ID, QueryId),
-    FetchNodes,
-    FetchPeers(ID),
-}
-
-// pub fn start_dht(
-//     peers: Peers,
-//     info_hash: ID,
-//     peer_with_dht: mpsc::Receiver<SocketAddrV4>,
-//     shutdown_rx: shutdown::Receiver,
-// ) {
-//     tokio::spawn(async move {
-//         dht(peers, info_hash, peer_with_dht, shutdown_rx).await;
-//     });
-// }
+// TODO!!! The worst naming yet. like ConMsg is channel message from connection to task and ConCommand the other way.
 
 #[instrument(skip_all)]
 pub async fn dht(
-    mut peers: Peers,
     info_hash: ID,
+    tcp_port: u16,
+    mut routing_table: RoutingTable,
+    mut peers: Peers,
     mut peer_with_dht: mpsc::Receiver<SocketAddrV4>,
     mut shutdown_rx: shutdown::Receiver,
-) {
-    let (mut routing_table, udp_connection, mut dht_command_rx, mut peer_map) =
-        setup(&peers, info_hash).await;
-
-    loop {
-        if let Err(e) = select! {
-            _ = shutdown_rx.recv() => {
-                routing_table.store().await;
-                return;
-            }
-            addr = peer_with_dht.recv() => {
-                try_ping_node(&udp_connection, addr).await
-            },
-            command = dht_command_rx.recv() => process_incoming_command(command, &mut routing_table, &udp_connection, &mut peers, &mut peer_map).await,
-        } {
-            error!("dht command failed. e = {:?}", e);
-        }
-    }
-}
-
-async fn setup(
-    peers: &Peers,
-    info_hash: ID,
-) -> (RoutingTable, Connection, Receiver<DhtCommand>, PeerMap) {
-    let routing_table = RoutingTable::new().await;
-
-    let (dht_tx, dht_rx) = mpsc::channel(64);
-    let (conn_tx, conn_rx) = mpsc::channel(1 << 8);
-
-    let udp_connection =
-        Connection::new(*routing_table.own_id(), conn_tx, conn_rx, dht_tx.to_owned());
-
+    mut connection: Connection,
+) -> anyhow::Result<()> {
     let known_peers: HashSet<Peer> = peers.peer_addresses().into_iter().collect();
-    let peer_map = HashMap::from([(info_hash.to_owned(), known_peers)]);
+    let mut peer_map = HashMap::from([(info_hash.to_owned(), known_peers)]);
 
     for addr in routing_table.iter_nodes().map(|node| node.addr) {
-        ping_node(&udp_connection, addr).await;
+        debug!(?addr);
+        connection.send_ping(addr).await?;
     }
 
-    let dht_tx_clone = dht_tx.clone();
-    tokio::spawn(async move {
-        periodically_fetch_nodes(dht_tx_clone).await;
-    });
+    let mut spawn_peer_fetcher_when_at_least_one_node_is_good = true;
 
-    let dht_tx_clone = dht_tx;
-    tokio::spawn(async move {
-        periodically_fetch_peers(dht_tx_clone, info_hash).await;
-    });
+    loop {
+        debug!("loop");
+        select! {
+            _ = shutdown_rx.recv() => {
+                routing_table.store().await;
+                return Ok(());
+            }
+            addr = peer_with_dht.recv() => {
+                let addr = addr.ok_or(anyhow!("peer receiver failed"))?;
+                connection.send_ping(addr).await?;
+            },
+            message = connection.recv() => {
+                match message? {
+                    ConMsg::Query(query) => process_query(query, &mut routing_table, &connection, &mut peers, &mut peer_map).await?,
+                    ConMsg::Resp(resp) => process_resp(resp, &connection, &mut routing_table).await?,
+                }
+            },
+        }
 
-    (routing_table, udp_connection, dht_rx, peer_map)
+        if spawn_peer_fetcher_when_at_least_one_node_is_good && routing_table.count_good_nodes() > 0
+        {
+            let Some(nodes) = routing_table.get_closest_nodes(&info_hash) else {
+                warn!("I just checked few lines ago... can't say anything useful, you just have to start debugging");
+                continue;
+            };
+
+            let querying_connection = connection.get_querying_connection();
+            let peers_cl = peers.clone();
+
+            tokio::spawn(async move {
+                if let Err(e) = periodically_fetch_peers(
+                    info_hash,
+                    tcp_port,
+                    nodes,
+                    querying_connection,
+                    peers_cl,
+                )
+                .await
+                {
+                    error!(?e);
+                }
+            });
+
+            spawn_peer_fetcher_when_at_least_one_node_is_good = false;
+        }
+    }
 }
 
-async fn process_incoming_command(
-    command: Option<DhtCommand>,
+async fn process_query(
+    query: Query,
     routing_table: &mut RoutingTable,
     connection: &Connection,
     torrent_peers: &mut Peers,
     dht_peer_map: &mut PeerMap,
-) -> Result<()> {
-    let Some(command)  = command else{
-        return Err(anyhow!("DhtCommand is None"));
-    };
-
-    match command {
-        DhtCommand::Touch(id, addr) => routing_table.touch_node(id, addr),
-        DhtCommand::NewNodes(nodes) => ping_unknown_nodes(nodes, connection, routing_table),
-        DhtCommand::NewPeers(new_peers, info_hash) => {
-            store_new_peers(new_peers, info_hash, torrent_peers, dht_peer_map)
+) -> Result<(), ConError> {
+    match query {
+        Query::FindNode { target, query_id } => {
+            process_find_node_query(connection, routing_table, target, query_id).await?
         }
-        DhtCommand::FindNode(target, tid, from) => {
-            find_node(connection, routing_table, &target, from, tid)?
-        }
-        DhtCommand::GetPeers(info_hash, tid, from) => get_peers(
-            connection,
-            routing_table,
-            dht_peer_map,
+        Query::GetPeers {
             info_hash,
-            from,
-            tid,
-        )?,
-        DhtCommand::FetchNodes => fetch_nodes(routing_table, connection),
-        DhtCommand::FetchPeers(info_hash) => {
-            fetch_peers(routing_table, connection, info_hash).await
+            query_id,
+        } => {
+            process_get_peers_query(
+                connection,
+                routing_table,
+                torrent_peers,
+                dht_peer_map,
+                info_hash,
+                query_id,
+            )
+            .await?
         }
+        Query::NewPeer {
+            new_peer,
+            info_hash,
+        } => store_new_peer(new_peer, info_hash, torrent_peers, dht_peer_map),
     }
 
     Ok(())
 }
 
-fn ping_unknown_nodes(nodes: Nodes, connection: &Connection, routing_table: &RoutingTable) {
-    let unknown_node_addresses: Vec<SocketAddrV4> = nodes
-        .iter()
-        .filter_map(|node| (!routing_table.contains_node(&node.id)).then_some(node.addr))
-        .collect();
+async fn process_find_node_query(
+    connection: &Connection,
+    routing_table: &mut RoutingTable,
+    target: ID,
+    query_id: QueryId,
+) -> Result<(), ConError> {
+    if let Some(nodes) = routing_table.find_node(&target) {
+        connection.resp_to_find_node(nodes, query_id).await?;
+    };
 
-    let owned_connection = connection.to_owned();
-    tokio::spawn(async move {
-        for node_addr in unknown_node_addresses {
-            if let Err(e) = try_ping_node(&owned_connection, Some(node_addr)).await {
-                warn!(?e);
-            }
-        }
-    });
+    Ok(())
 }
 
-fn store_new_peers(
-    new_peers: Vec<Peer>,
-    info_hash: ID,
+async fn process_get_peers_query(
+    connection: &Connection,
+    routing_table: &mut RoutingTable,
     torrent_peers: &mut Peers,
     dht_peer_map: &mut PeerMap,
-) {
-    let was_inserted = match dht_peer_map.entry(info_hash.to_owned()) {
-        hash_map::Entry::Occupied(mut entry) => {
-            let stored_peers = entry.get_mut();
-            let mut was_inserted = false;
-            for peer in new_peers.iter() {
-                was_inserted |= stored_peers.insert(peer.to_owned());
-            }
-            was_inserted
-        }
-        hash_map::Entry::Vacant(entry) => {
-            entry.insert(new_peers.iter().cloned().collect());
-            true
-        }
-    };
-
-    // making sure I need this because it's a locking insert
-    if was_inserted && torrent_peers.serve(&info_hash) {
-        debug!("new peers {:?}", new_peers);
-        torrent_peers.extend(&new_peers);
-    }
-}
-
-fn find_node(
-    connection: &Connection,
-    routing_table: &mut RoutingTable,
-    target: &ID,
-    from: SocketAddrV4,
-    tid: Bytes,
-) -> Result<()> {
-    let Some(nodes) = routing_table.find_node(target) else {
-        return Err(anyhow!("can't find nodes"));
-    };
-
-    let command = ConCommand::new(
-        CommandType::Resp(RespCommand::FindNode { nodes }, tid),
-        from,
-    );
-
-    let owned_connection = connection.to_owned();
-    tokio::spawn(async move {
-        if let Err(e) = owned_connection.send(command).await {
-            warn!(?e);
-        }
-    });
-
-    Ok(())
-}
-
-fn get_peers(
-    connection: &Connection,
-    routing_table: &mut RoutingTable,
-    dht_peer_map: &mut PeerMap,
     info_hash: ID,
-    from: SocketAddrV4,
-    tid: Bytes,
-) -> Result<()> {
-    let values_or_nodes = match dht_peer_map.get(&info_hash) {
-        Some(stored_peers) => {
-            let mut rng = thread_rng();
+    query_id: QueryId,
+) -> Result<(), ConError> {
+    let peers = if torrent_peers.serve(&info_hash) {
+        torrent_peers.get_good_peers(MTU / COMPACT_PEER_LEN)
+    } else {
+        let mut rng = thread_rng();
+        dht_peer_map.get(&info_hash).map(|peers| {
+            peers
+                .into_iter()
+                .choose_multiple(&mut rng, MTU / COMPACT_PEER_LEN)
+                .into_iter()
+                .cloned()
+                .collect()
+        })
+    };
 
-            ValuesOrNodes::Values {
-                values: stored_peers
-                    .iter()
-                    .choose_multiple(&mut rng, MTU / COMPACT_PEER_LEN)
-                    .iter()
-                    .map(|p| **p)
-                    .collect(),
-            }
-        }
+    let values_or_nodes = match peers {
+        Some(peers) => ValuesOrNodes::Values { values: peers },
         None => {
             let Some(nodes) = routing_table.find_node(&info_hash) else {
-                return Err(anyhow!("can't find nodes"));
+                return Ok(()); // TODO this is not Ok but it's not crash worthy. maybe I should use non-option rv? it won't ever be empty anyway.
             };
 
             ValuesOrNodes::Nodes { nodes }
         }
     };
 
-    let command = ConCommand::new(
-        CommandType::Resp(RespCommand::GetPeers { values_or_nodes }, tid),
-        from,
-    );
+    connection
+        .resp_to_get_peers(values_or_nodes, query_id)
+        .await
+}
 
-    let owned_connection = connection.to_owned();
-    tokio::spawn(async move {
-        if let Err(e) = owned_connection.send(command).await {
-            warn!(?e);
+fn store_new_peer(
+    new_peer: Peer,
+    info_hash: ID,
+    torrent_peers: &mut Peers,
+    dht_peer_map: &mut PeerMap,
+) {
+    if torrent_peers.serve(&info_hash) {
+        torrent_peers.insert(new_peer);
+    } else {
+        dht_peer_map
+            .entry(info_hash.to_owned())
+            .and_modify(|peers| {
+                peers.insert(new_peer);
+            })
+            .or_insert(HashSet::from([new_peer]));
+    }
+}
+
+async fn process_resp(
+    resp: Resp,
+    connection: &Connection,
+    routing_table: &mut RoutingTable,
+) -> Result<(), ConError> {
+    match resp {
+        Resp::Touch { id, from } => routing_table.touch_node(id, from),
+        Resp::NewNodes { nodes, from, id } => {
+            routing_table.touch_node(id, from);
+            ping_unknown_nodes(nodes, connection, routing_table).await?
         }
-    });
+        _ => warn!("received response to get_peers message, but it is never sent from here"),
+    }
 
     Ok(())
 }
 
-async fn try_ping_node(connection: &Connection, addr: Option<SocketAddrV4>) -> Result<()> {
-    match addr {
-        Some(addr) => {
-            ping_node(connection, addr).await;
-            Ok(())
-        }
-        None => Err(anyhow!("missing addr. hint: connection might be closed")),
-    }
-}
-
-async fn ping_node(connection: &Connection, addr: SocketAddrV4) {
-    let command = ConCommand::new(CommandType::Query(QueryCommand::Ping), addr);
-
-    let _ = connection.send(command).await;
-}
-
-fn fetch_nodes(routing_table: &mut RoutingTable, connection: &Connection) {
-    let targets = get_non_full_bucket_infos(routing_table);
-
-    let owned_connection = connection.to_owned();
-    tokio::spawn(async move {
-        for (id, addr) in targets {
-            let command = ConCommand::new(
-                CommandType::Query(QueryCommand::FindNode { target: id }),
-                addr,
-            );
-
-            if let Err(e) = owned_connection.send(command).await {
-                warn!(?e);
-            }
-        }
-    });
-}
-
-fn get_non_full_bucket_infos(routing_table: &mut RoutingTable) -> Vec<(ID, SocketAddrV4)> {
-    let mut targets = Vec::new();
-
-    for id in routing_table.iter_over_ids_within_fillable_buckets() {
-        let node = match routing_table.find_node(&id) {
-            Some(nodes) => match nodes.iter().next() {
-                Some(node) => node.to_owned(),
-                None => continue,
-            },
-            None => continue,
-        };
-
-        targets.push((id, node.addr));
-    }
-
-    targets
-}
-
-async fn fetch_peers(routing_table: &RoutingTable, connection: &Connection, info_hash: ID) {
-    let Some(nodes) = routing_table.find_node(&info_hash) else {
-        return;
-    };
-
-    let close_node_addresses: Vec<SocketAddrV4> = nodes
+async fn ping_unknown_nodes(
+    nodes: Nodes,
+    connection: &Connection,
+    routing_table: &RoutingTable,
+) -> Result<(), ConError> {
+    let unknown_node_addresses: Vec<SocketAddrV4> = nodes
         .iter()
-        .take(FETCH_PEER_PARALLEL)
-        .map(|node| node.addr)
+        .filter_map(|node| (!routing_table.contains_node(&node.id)).then_some(node.addr))
         .collect();
 
-    let owned_connection = connection.to_owned();
-    tokio::spawn(async move {
-        for addr in close_node_addresses {
-            let command = ConCommand::new(
-                CommandType::Query(QueryCommand::GetPeers {
-                    info_hash: info_hash.to_owned(),
-                }),
-                addr,
-            );
+    for node_addr in unknown_node_addresses {
+        connection.send_ping(node_addr).await?;
+    }
 
-            if let Err(e) = owned_connection.send(command).await {
-                warn!(?e);
-            }
-        }
-    });
+    Ok(())
 }
 
-async fn periodically_fetch_nodes(dht_command_tx: mpsc::Sender<DhtCommand>) {
-    let growth_formula = |x: u64| (9.0 + 0.001 * (x as f64).powf(2.4)) as u64;
+type NodeMap = HashMap<SocketAddrV4, NodeCloseToInfoHash>;
 
-    for i in 0..u64::MAX {
-        if let Err(e) = dht_command_tx.send(DhtCommand::FetchNodes).await {
-            error!("periodical fetch nodes failed {:?}", e);
-        };
+async fn periodically_fetch_peers(
+    info_hash: ID,
+    port: u16,
+    nodes: Vec<Node>,
+    mut connection: QueryingConnection,
+    mut peers: Peers,
+) -> Result<(), ConError> {
+    let mut nodes: NodeMap = nodes
+        .into_iter()
+        .map(|node| (node.addr, NodeCloseToInfoHash::Unknown(node.id)))
+        .collect();
 
-        let seconds_to_sleep = growth_formula(i);
-        let seconds_to_sleep = if seconds_to_sleep < MAX_NODE_FETCH_SLEEP {
-            seconds_to_sleep
-        } else {
-            MAX_NODE_FETCH_SLEEP
-        };
+    let mut interval =
+        CappedGrowingInterval::new(MAX_SECS_INTERVAL_BETWEEN_PEER_FETCHES, |x: u64| {
+            (10.0 + 0.01 * (x as f64).powf(3.7)) as u64
+        });
 
-        sleep(Duration::from_secs(seconds_to_sleep)).await;
+    loop {
+        interval.tick().await;
+        fetch_peers(&info_hash, &mut nodes, &mut connection, &mut peers).await?;
+
+        let mut x: Vec<(SocketAddrV4, NodeCloseToInfoHash)> = nodes.into_iter().collect();
+        x.sort_by(|(_, a), (_, b)| {
+            let discriminant_ordering = a.cmp_discriminant(b);
+            if discriminant_ordering != Ordering::Equal {
+                return discriminant_ordering;
+            }
+
+            (a.id() - info_hash).cmp(&(b.id() - info_hash))
+        });
+
+        nodes = x.into_iter().take(MAX_ACTIVE_CLOSE_NODES).collect();
+
+        for (addr, node) in nodes
+            .iter()
+            .filter(|(_, node)| node.is_known())
+            .take(ANNOUNCE_TO_N_TOP_NODES)
+        {
+            if let Some(token) = node.token() {
+                connection
+                    .send_announce_peer(info_hash, port, token.as_bytes(), *addr)
+                    .await?
+            }
+        }
+
+        // let x = nodes_with_peers
+        //     .into_iter()
+        //     .map(|(addr, _)| NodeCloseToInfoHash::HasPeers(addr))
+        //     .chain(
+        //         active_nodes
+        //             .into_iter()
+        //             .map(|(addr, _)| NodeCloseToInfoHash::Peerless(addr)),
+        //     );
+
+        // nodes.extend(x);
     }
 }
 
-async fn periodically_fetch_peers(dht_command_tx: mpsc::Sender<DhtCommand>, info_hash: ID) {
-    let growth_formula = |x: u64| (5.0 + 0.000001 * (x as f64).powf(5.6)) as u64;
+const ANNOUNCE_TO_N_TOP_NODES: usize = 1 << 4;
+const MAX_ACTIVE_CLOSE_NODES: usize = 1 << 7;
 
-    for i in 0..u64::MAX {
-        if let Err(e) = dht_command_tx
-            .send(DhtCommand::FetchPeers(info_hash.to_owned()))
-            .await
-        {
-            error!("periodical fetch peers failed {:?}", e);
+#[derive(Debug)]
+enum NodeCloseToInfoHash {
+    Unknown(ID),
+    HasPeers { id: ID, token: NoSizeBytes },
+    Peerless { id: ID, token: NoSizeBytes },
+}
+
+impl Eq for NodeCloseToInfoHash {}
+
+impl PartialEq for NodeCloseToInfoHash {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Unknown(l_id), Self::Unknown(r_id)) => l_id == r_id,
+            (Self::HasPeers { id: l_id, .. }, Self::HasPeers { id: r_id, .. }) => l_id == r_id,
+            (Self::Peerless { id: l_id, .. }, Self::Peerless { id: r_id, .. }) => l_id == r_id,
+            _ => false,
+        }
+    }
+}
+
+impl NodeCloseToInfoHash {
+    fn id(&self) -> ID {
+        match self {
+            NodeCloseToInfoHash::Unknown(id) => *id,
+            NodeCloseToInfoHash::HasPeers { id, .. } => *id,
+            NodeCloseToInfoHash::Peerless { id, .. } => *id,
+        }
+    }
+
+    fn is_known(&self) -> bool {
+        match self {
+            NodeCloseToInfoHash::Unknown(_) => false,
+            NodeCloseToInfoHash::HasPeers { .. } => true,
+            NodeCloseToInfoHash::Peerless { .. } => true,
+        }
+    }
+
+    fn token(&self) -> Option<&NoSizeBytes> {
+        match self {
+            NodeCloseToInfoHash::Unknown(_) => None,
+            NodeCloseToInfoHash::HasPeers { token, .. } => Some(token),
+            NodeCloseToInfoHash::Peerless { token, .. } => Some(token),
+        }
+    }
+
+    fn cmp_discriminant(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (NodeCloseToInfoHash::HasPeers { .. }, NodeCloseToInfoHash::Peerless { .. }) => {
+                Ordering::Greater
+            }
+            (NodeCloseToInfoHash::HasPeers { .. }, NodeCloseToInfoHash::Unknown(_)) => {
+                Ordering::Greater
+            }
+            (NodeCloseToInfoHash::Peerless { .. }, NodeCloseToInfoHash::Unknown(_)) => {
+                Ordering::Greater
+            }
+            (NodeCloseToInfoHash::Peerless { .. }, NodeCloseToInfoHash::HasPeers { .. }) => {
+                Ordering::Less
+            }
+            (NodeCloseToInfoHash::Unknown(_), NodeCloseToInfoHash::HasPeers { .. }) => {
+                Ordering::Less
+            }
+            (NodeCloseToInfoHash::Unknown(_), NodeCloseToInfoHash::Peerless { .. }) => {
+                Ordering::Less
+            }
+            _ => Ordering::Equal,
+        }
+    }
+}
+
+async fn fetch_peers(
+    info_hash: &ID,
+    active_nodes: &mut NodeMap,
+    connection: &mut QueryingConnection,
+    peers: &mut Peers,
+) -> Result<(), ConError> {
+    // let mut active_nodes = NodeMap::new();
+
+    for addr in active_nodes.keys() {
+        connection.send_get_peers(*info_hash, *addr).await?;
+    }
+
+    loop {
+        let resp = tokio::select! {
+            resp = connection.recv_resp() => {resp},
+            _ = sleep(Duration::from_secs(3)) => {break}
         };
 
-        let seconds_to_sleep = growth_formula(i);
-        let seconds_to_sleep = if seconds_to_sleep < MAX_PEER_FETCH_SLEEP {
-            seconds_to_sleep
-        } else {
-            MAX_PEER_FETCH_SLEEP
+        let Resp::GetPeersResp { from, token, v_or_n } = resp else {
+            warn!("expected response to get_peers message, got {:?}", resp);
+            continue;
         };
 
-        sleep(Duration::from_secs(seconds_to_sleep)).await;
+        let Some(v) = active_nodes.get_mut(&from) else {
+            continue; // it's by someone who already got marked as inactive
+        };
+
+        match v_or_n {
+            ValuesOrNodes::Values { values } => {
+                peers.extend(values.into_iter());
+                *v = NodeCloseToInfoHash::HasPeers { id: v.id(), token };
+            }
+            ValuesOrNodes::Nodes { nodes } => {
+                *v = NodeCloseToInfoHash::Peerless { id: v.id(), token };
+
+                for Node { addr, id, .. } in nodes.iter() {
+                    if let hash_map::Entry::Vacant(entry) = active_nodes.entry(*addr) {
+                        connection.send_get_peers(*info_hash, *addr).await?;
+                        entry.insert(NodeCloseToInfoHash::Unknown(*id));
+                    }
+                }
+            }
+        }
+        debug!("node map len: {}", active_nodes.len());
+    }
+
+    Ok(())
+}
+
+struct CappedGrowingInterval {
+    growth_formula: fn(u64) -> u64,
+    iter_count: u64,
+    max: u64,
+}
+
+impl CappedGrowingInterval {
+    fn new(max: u64, growth_formula: fn(u64) -> u64) -> Self {
+        Self {
+            growth_formula,
+            iter_count: 0,
+            max,
+        }
+    }
+
+    async fn tick(&mut self) {
+        let sleep_duration = Ord::min((self.growth_formula)(self.iter_count), self.max);
+        sleep(Duration::from_secs(sleep_duration)).await;
+        self.iter_count += 1;
+        debug!("tick");
     }
 }

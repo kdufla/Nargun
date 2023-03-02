@@ -1,6 +1,6 @@
 pub enum Error {
     ConDropped {
-        source: Option<Box<dyn std::error::Error>>,
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
 }
 

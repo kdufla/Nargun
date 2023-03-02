@@ -1,5 +1,4 @@
-use crate::data_structures::{ID, ID_LEN};
-use crate::dht::dht_manager::DhtCommand;
+use super::Resp;
 use crate::dht::krpc_message::{Arguments, Message, Response};
 use bytes::Bytes;
 use std::collections::HashMap;
@@ -8,20 +7,14 @@ use tokio::sync::mpsc;
 #[derive(Clone, Debug)]
 pub struct PendingRequests(HashMap<Bytes, (RequestType, Requester)>);
 
-type Requester = mpsc::Sender<DhtCommand>;
+type Requester = mpsc::Sender<Resp>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RequestType {
     Ping,
-    FindNode(ID),
-    GetPeers(ID),
+    FindNode,
+    GetPeers,
     AnnouncePeer,
-}
-
-impl RequestType {
-    fn eq_discriminant(&self, other: &Self) -> bool {
-        std::mem::discriminant(self) != std::mem::discriminant(other)
-    }
 }
 
 impl PendingRequests {
@@ -29,11 +22,11 @@ impl PendingRequests {
         Self(HashMap::new())
     }
 
-    pub fn get(&self, tid: &Bytes, response_type: RequestType) -> Option<(RequestType, Requester)> {
+    pub fn get(&mut self, tid: &Bytes, response_type: RequestType) -> Option<Requester> {
         let (requested_type, _) = self.0.get(tid)?;
 
-        if requested_type.eq_discriminant(&response_type) {
-            self.0.remove(tid)
+        if *requested_type == response_type {
+            self.0.remove(tid).map(|(_, requester)| requester)
         } else {
             None
         }
@@ -52,8 +45,8 @@ impl From<&Message> for RequestType {
 
         match arguments {
             Arguments::Ping { .. } => RequestType::Ping,
-            Arguments::FindNode { target, .. } => RequestType::FindNode(target.to_owned()),
-            Arguments::GetPeers { info_hash, .. } => RequestType::GetPeers(info_hash.to_owned()),
+            Arguments::FindNode { .. } => RequestType::FindNode,
+            Arguments::GetPeers { .. } => RequestType::GetPeers,
             Arguments::AnnouncePeer { .. } => RequestType::AnnouncePeer,
         }
     }
@@ -63,8 +56,8 @@ impl From<&Response> for RequestType {
     fn from(response: &Response) -> Self {
         match response {
             Response::Ping { .. } => RequestType::Ping,
-            Response::FindNode { .. } => RequestType::FindNode(ID::new([0; ID_LEN])),
-            Response::GetPeers { .. } => RequestType::GetPeers(ID::new([0; ID_LEN])),
+            Response::FindNode { .. } => RequestType::FindNode,
+            Response::GetPeers { .. } => RequestType::GetPeers,
             Response::AnnouncePeer { .. } => RequestType::AnnouncePeer,
         }
     }
@@ -89,7 +82,7 @@ mod tests {
 
         let request_type: RequestType = (&message).into();
 
-        assert_eq!(request_type, RequestType::GetPeers(dec_digits_twice));
+        assert_eq!(request_type, RequestType::GetPeers);
     }
 
     #[test]

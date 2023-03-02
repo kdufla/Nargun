@@ -3,6 +3,7 @@ use openssl::sha;
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
+    borrow::Borrow,
     cmp::Ordering,
     fmt,
     ops::{BitXor, Sub},
@@ -215,9 +216,12 @@ impl PartialOrd for ID {
 
 impl Ord for ID {
     fn cmp(&self, other: &Self) -> Ordering {
-        for (self_byte, other_byte) in self.0.iter().zip(other.0.iter()) {
-            if self_byte.cmp(other_byte) != Ordering::Equal {
-                return self_byte.cmp(other_byte);
+        for (self_bit, other_bit) in self.bit_iter().zip(other.bit_iter()) {
+            match (self_bit, other_bit) {
+                (true, true) => return Ordering::Equal,
+                (true, false) => return Ordering::Greater,
+                (false, true) => return Ordering::Less,
+                _ => (),
             }
         }
 
@@ -239,10 +243,26 @@ impl<'a, 'b> BitXor<&'b ID> for &'a ID {
     }
 }
 
+impl BitXor<ID> for ID {
+    type Output = ID;
+
+    fn bitxor(self, rhs: ID) -> Self::Output {
+        self.borrow().bitxor(&rhs)
+    }
+}
+
 impl<'a, 'b> Sub<&'b ID> for &'a ID {
     type Output = ID;
 
     fn sub(self, other: &'b ID) -> Self::Output {
+        self ^ other
+    }
+}
+
+impl Sub<ID> for ID {
+    type Output = ID;
+
+    fn sub(self, other: ID) -> Self::Output {
         self ^ other
     }
 }
@@ -397,23 +417,20 @@ mod tests {
 
     #[test]
     fn ord() {
-        let arr = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+        let mut arr = [0b0000_1111; ID_LEN];
         let id = ID::new(arr);
 
-        let eq_arr = arr;
-        let eq_id = ID::new(eq_arr);
+        let eq_id = ID::new(arr);
 
-        let mut less_arr = arr;
-        less_arr[9] -= 1;
-        let less_id = ID::new(less_arr);
+        arr[0] = 0b0001_1111;
+        let less_id = ID::new(arr);
 
-        let mut greater_arr = arr;
-        greater_arr[9] += 1;
-        let greater_id = ID::new(greater_arr);
+        arr[0] = 0b0000_0111;
+        let greater_id = ID::new(arr);
 
-        assert_eq!(eq_id.cmp(&id), Ordering::Equal);
-        assert_eq!(less_id.cmp(&id), Ordering::Less);
-        assert_eq!(greater_id.cmp(&id), Ordering::Greater);
+        assert_eq!(Ordering::Equal, id.cmp(&eq_id));
+        assert_eq!(Ordering::Less, id.cmp(&less_id));
+        assert_eq!(Ordering::Greater, id.cmp(&greater_id));
     }
 
     #[test]
