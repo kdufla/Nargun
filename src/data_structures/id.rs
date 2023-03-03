@@ -254,6 +254,7 @@ impl BitXor<ID> for ID {
 impl<'a, 'b> Sub<&'b ID> for &'a ID {
     type Output = ID;
 
+    #[allow(clippy::suspicious_arithmetic_impl)]
     fn sub(self, other: &'b ID) -> Self::Output {
         self ^ other
     }
@@ -262,6 +263,7 @@ impl<'a, 'b> Sub<&'b ID> for &'a ID {
 impl Sub<ID> for ID {
     type Output = ID;
 
+    #[allow(clippy::suspicious_arithmetic_impl)]
     fn sub(self, other: ID) -> Self::Output {
         self ^ other
     }

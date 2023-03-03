@@ -17,7 +17,7 @@ pub struct Bucket {
     data: [Option<Node>; K_NODE_PER_BUCKET],
 }
 
-#[derive(Eq, Clone, Deserialize, Serialize, PartialOrd)]
+#[derive(Eq, Clone, Deserialize, Serialize)]
 pub struct Node {
     pub id: ID,
     pub addr: SocketAddrV4,
@@ -28,6 +28,12 @@ pub struct Node {
 impl Ord for Node {
     fn cmp(&self, other: &Self) -> Ordering {
         self.id.cmp(&other.id)
+    }
+}
+
+impl PartialOrd for Node {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -63,11 +69,7 @@ impl Bucket {
             .find_replaceable_node()
             .ok_or(anyhow!("bucket if full"))?;
 
-        *replaceable_node = Some(Node {
-            id: id.to_owned(),
-            addr: addr.to_owned(),
-            last_seen: Some(Instant::now()),
-        });
+        *replaceable_node = Some(Node::new_good(*id, *addr));
 
         Ok(())
     }
@@ -198,10 +200,6 @@ impl Node {
         self.id == *id
     }
 
-    pub fn cmp_by_id(&self, id: &ID) -> Ordering {
-        self.id.cmp(id)
-    }
-
     pub fn cmp_by_distance_to_id(&self, other: &Self, id: &ID) -> Ordering {
         let distance_to_self = &self.id - id;
         let distance_to_other = &other.id - id;
@@ -246,7 +244,6 @@ impl fmt::Debug for Node {
 #[cfg(test)]
 mod tests {
     use tokio::time::Instant;
-    use tracing::debug;
     use tracing_test::traced_test;
 
     use crate::{

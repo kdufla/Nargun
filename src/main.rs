@@ -1,3 +1,4 @@
+mod capped_growing_interval;
 mod client;
 mod config;
 mod data_structures;
@@ -62,7 +63,6 @@ async fn main() -> Result<()> {
     let peers = Peers::new(&torrent.info_hash);
     let (tcp_port, _udp_port) = gateway_device::open_any_port()?;
     let (dht_tx, dht_rx) = mpsc::channel(1 << 5);
-    // let (that_unknown_tx, _rx) = broadcast::channel(1 << 5);
     let pieces_downloaded = Arc::new(AtomicU64::new(0));
 
     start_dht(
@@ -74,6 +74,7 @@ async fn main() -> Result<()> {
     )
     .await;
 
+    // let (that_unknown_tx, _rx) = broadcast::channel(1 << 5);
     // start_client(
     //     client_id,
     //     peers,
@@ -84,6 +85,7 @@ async fn main() -> Result<()> {
     //     tcp_port,
     //     shutdown_rx.clone(),
     // );
+
     // let _ = fs::FS::new("base_dir".to_string(), &torrent.info).await;
 
     // if let Mode::Multi { files } = &torrent.info.mode {

@@ -1,3 +1,5 @@
+#![allow(clippy::all)]
+
 mod manager;
 mod peer;
 mod tracker;
@@ -16,8 +18,6 @@ pub use peer::{
     Peers,
     COMPACT_PEER_LEN,
 };
-
-
 
 // TODO probably before committing, figure this shit out!
 pub fn start_client(

@@ -1,30 +1,26 @@
-use super::Resp;
+use super::FromConResp;
 use crate::data_structures::ID;
+use crate::dht::connection::QueryId;
 use crate::dht::krpc_message::{rand_tid, Message, Nodes, ValuesOrNodes};
 use bytes::Bytes;
 use std::net::SocketAddrV4;
 use tokio::sync::mpsc;
 
 #[derive(Debug)]
-pub struct ConCommand {
-    pub command_type: CommandType,
-    pub target: SocketAddrV4,
-}
-
-#[derive(Debug)]
-pub enum CommandType {
+pub enum ToCon {
     Query {
-        command: QueryCommand,
-        resp_returner: mpsc::Sender<Resp>,
+        resp_returner: mpsc::Sender<FromConResp>,
+        target: SocketAddrV4,
+        variant: ToConQuery,
     },
     Resp {
-        command: RespCommand,
-        tid: Bytes,
+        query_id: QueryId,
+        variant: ToConResp,
     },
 }
 
 #[derive(Debug)]
-pub enum QueryCommand {
+pub enum ToConQuery {
     Ping,
     FindNode {
         target: ID,
@@ -32,7 +28,6 @@ pub enum QueryCommand {
     GetPeers {
         info_hash: ID,
     },
-    // TODO announce is still unimplemented
     AnnouncePeer {
         info_hash: ID,
         port: u16,
@@ -41,23 +36,14 @@ pub enum QueryCommand {
 }
 
 #[derive(Debug)]
-pub enum RespCommand {
+pub enum ToConResp {
     Ping,
     FindNode { nodes: Nodes },
     GetPeers { values_or_nodes: ValuesOrNodes },
     AnnouncePeer,
 }
 
-impl ConCommand {
-    pub fn new(command: CommandType, target: SocketAddrV4) -> Self {
-        Self {
-            command_type: command,
-            target,
-        }
-    }
-}
-
-impl QueryCommand {
+impl ToConQuery {
     pub fn into_message(self, own_node_id: &ID) -> Message {
         let transaction_id = rand_tid();
         match self {
@@ -77,17 +63,17 @@ impl QueryCommand {
     }
 }
 
-impl RespCommand {
+impl ToConResp {
     pub fn into_message(self, own_node_id: &ID, transaction_id: Bytes, token: Bytes) -> Message {
         match self {
-            RespCommand::Ping => Message::ping_resp(own_node_id, transaction_id),
-            RespCommand::FindNode { nodes } => {
+            ToConResp::Ping => Message::ping_resp(own_node_id, transaction_id),
+            ToConResp::FindNode { nodes } => {
                 Message::find_nodes_resp(own_node_id, nodes, transaction_id)
             }
-            RespCommand::GetPeers { values_or_nodes } => {
+            ToConResp::GetPeers { values_or_nodes } => {
                 Message::get_peers_resp(own_node_id, token, values_or_nodes, transaction_id)
             }
-            RespCommand::AnnouncePeer => Message::announce_peer_resp(own_node_id, transaction_id),
+            ToConResp::AnnouncePeer => Message::announce_peer_resp(own_node_id, transaction_id),
         }
     }
 }
@@ -96,11 +82,10 @@ impl RespCommand {
 mod tests {
     use std::net::SocketAddrV4;
 
-    use super::QueryCommand;
+    use super::{ToConQuery, ToConResp};
     use crate::{
         data_structures::ID,
         dht::{
-            connection::RespCommand,
             krpc_message::{rand_tid, Message, Nodes},
             routing_table::Node,
         },
@@ -111,9 +96,8 @@ mod tests {
     fn query_into_message() {
         let info_hash = ID::new(rand::random());
         let own_node_id = ID::new(rand::random());
-        let secret = ID::new(rand::random());
 
-        let query_command = QueryCommand::GetPeers {
+        let query_command = ToConQuery::GetPeers {
             info_hash: info_hash.to_owned(),
         };
 
@@ -138,7 +122,7 @@ mod tests {
             Node::from_compact_bytes("rdYAxWC9Zi!A97zKJUbH9HVcgP".as_bytes()).unwrap(),
         );
 
-        let resp_command = RespCommand::FindNode {
+        let resp_command = ToConResp::FindNode {
             nodes: nodes.to_owned(),
         };
         let token = secret.hash_as_bytes(

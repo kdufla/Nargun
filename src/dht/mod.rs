@@ -1,6 +1,7 @@
 mod connection;
 mod dht_manager;
 mod krpc_message;
+mod peer_fetcher;
 mod routing_table;
 
 use tracing::error;

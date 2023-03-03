@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::mem::discriminant;
 use std::sync::{Arc, Mutex as StdMutex};
 
+const ENOUGH_GOOD_PEERS: usize = 1 << 7;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Status {
     // TODO these need Instants and weighted sort based on elapsed time
@@ -39,6 +41,13 @@ impl Peers {
 
     pub fn peer_addresses(&self) -> Vec<Peer> {
         self.data.lock().unwrap().keys().cloned().collect()
+    }
+
+    pub fn enough_peers(&self) -> bool {
+        self.get_good_peers(usize::MAX)
+            .map(|peers| peers.len())
+            .unwrap_or(0)
+            >= ENOUGH_GOOD_PEERS
     }
 
     pub fn get_good_peers(&self, limit: usize) -> Option<Vec<Peer>> {

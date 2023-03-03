@@ -1,4 +1,4 @@
-use super::Resp;
+use super::channel_message::FromConResp;
 use crate::dht::krpc_message::{Arguments, Message, Response};
 use bytes::Bytes;
 use std::collections::HashMap;
@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 #[derive(Clone, Debug)]
 pub struct PendingRequests(HashMap<Bytes, (RequestType, Requester)>);
 
-type Requester = mpsc::Sender<Resp>;
+type Requester = mpsc::Sender<FromConResp>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RequestType {

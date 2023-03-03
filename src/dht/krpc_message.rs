@@ -223,7 +223,7 @@ impl Message {
         }
     }
 
-    pub fn error_resp(error: Vec<Error>, transaction_id: Bytes) -> Self {
+    pub fn _error_resp(error: Vec<Error>, transaction_id: Bytes) -> Self {
         Self::Error {
             transaction_id: NoSizeBytes::new(transaction_id),
             msg_type: MessageType(b'e'),
@@ -635,7 +635,7 @@ mod krpc_tests {
 
         #[test]
         fn error() {
-            let message = Message::error_resp(
+            let message = Message::_error_resp(
                 vec![
                     Error::Code(201),
                     Error::Desc("A Generic Error Ocurred".to_string()),

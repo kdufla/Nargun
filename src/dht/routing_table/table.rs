@@ -92,8 +92,7 @@ impl RoutingTable {
             return Some(Nodes::Exact(exact_node.clone()));
         }
 
-        self.get_closest_nodes(id)
-            .map(|nodes| Nodes::Closest(nodes))
+        self.get_closest_nodes(id).map(Nodes::Closest)
     }
 
     pub fn iter_over_ids_within_fillable_buckets(&self) -> impl Iterator<Item = ID> + '_ {
@@ -111,13 +110,9 @@ impl RoutingTable {
                 Some(own_id)
             });
 
-        let last = self
-            .data
-            .last()
-            .map(|last_bucket| {
-                (self.data.len() <= ID_BIT_COUNT || last_bucket.is_full()).then_some(self.own_id)
-            })
-            .flatten();
+        let last = self.data.last().and_then(|last_bucket| {
+            (self.data.len() <= ID_BIT_COUNT || last_bucket.is_full()).then_some(self.own_id)
+        });
 
         from_non_own_buckets.chain(last.into_iter())
     }
