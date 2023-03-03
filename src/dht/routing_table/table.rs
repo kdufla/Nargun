@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddrV4;
 use tokio::fs::{DirBuilder, File};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tracing::{debug, error, warn};
+use tracing::{error, warn};
 
 const APP_DIR_NAME: &str = ".nargun";
 #[cfg(not(test))]
@@ -46,7 +46,6 @@ impl RoutingTable {
     }
 
     pub async fn store(&self) {
-        debug!(?self);
         let mut path = home::home_dir()
             .ok_or(anyhow!("can't find home dir"))
             .unwrap();
@@ -98,11 +97,29 @@ impl RoutingTable {
     }
 
     pub fn iter_over_ids_within_fillable_buckets(&self) -> impl Iterator<Item = ID> + '_ {
-        RandIdInFillableBucketIter {
-            iter: Box::new(self.data[..self.data.len() - 1].iter()),
-            last: self.data.last(),
-            own_id: self.own_id,
-        }
+        let from_non_own_buckets = self.data[..self.data.len() - 1]
+            .iter()
+            .filter_map(|bucket| {
+                if bucket.is_full() {
+                    return None;
+                }
+
+                let mut own_id = self.own_id;
+                own_id.flip_bit(bucket.depth() - 1);
+                own_id.randomize_after_bit(bucket.depth() - 1);
+
+                Some(own_id)
+            });
+
+        let last = self
+            .data
+            .last()
+            .map(|last_bucket| {
+                (self.data.len() <= ID_BIT_COUNT || last_bucket.is_full()).then_some(self.own_id)
+            })
+            .flatten();
+
+        from_non_own_buckets.chain(last.into_iter())
     }
 
     pub fn touch_node(&mut self, id: ID, addr: SocketAddrV4) {
@@ -117,6 +134,10 @@ impl RoutingTable {
 
     pub fn contains_node(&self, id: &ID) -> bool {
         self.get_bucket(id).contains(id)
+    }
+
+    pub fn get_closest_node(&self, id: &ID) -> Option<Node> {
+        self.get_closest_nodes(id)?.first().cloned()
     }
 
     pub fn get_closest_nodes(&self, id: &ID) -> Option<Vec<Node>> {
@@ -227,14 +248,6 @@ impl RoutingTable {
     }
 }
 
-// impl Iterator for RoutingTable {
-//     type Item = &Bucket;
-
-//     fn next(&mut self) -> Option<Self::Item> {
-//         todo!()
-//     }
-// }
-
 impl Default for RoutingTable {
     fn default() -> Self {
         let own_id = ID::new(rand::random());
@@ -242,38 +255,6 @@ impl Default for RoutingTable {
         data.push(Bucket::new(0));
 
         Self { own_id, data }
-    }
-}
-
-struct RandIdInFillableBucketIter<'a> {
-    own_id: ID,
-    last: Option<&'a Bucket>,
-    iter: Box<dyn Iterator<Item = &'a Bucket> + 'a>,
-}
-
-impl<'a> Iterator for RandIdInFillableBucketIter<'a> {
-    type Item = ID;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        for bucket in self.iter.by_ref() {
-            if bucket.is_full() {
-                continue;
-            }
-
-            let mut own_id = self.own_id;
-            own_id.flip_bit(bucket.depth() - 1);
-            own_id.randomize_after_bit(bucket.depth() - 1);
-
-            return Some(own_id);
-        }
-
-        let last = std::mem::replace(&mut self.last, None)?;
-
-        if last.depth() == ID_BIT_COUNT && last.is_full() {
-            None
-        } else {
-            Some(self.own_id)
-        }
     }
 }
 
