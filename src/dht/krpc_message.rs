@@ -1,8 +1,8 @@
 use super::routing_table::Node;
 use crate::{
-    client::Peer,
     data_structures::{NoSizeBytes, ID},
     dht::routing_table::COMPACT_NODE_LEN,
+    peers::peer::Peer,
 };
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
@@ -435,12 +435,12 @@ mod krpc_tests {
 
         use super::super::Message;
         use crate::{
-            client::Peer,
             data_structures::ID,
             dht::{
                 krpc_message::{rand_tid, Error, Nodes, ValuesOrNodes},
                 routing_table::Node,
             },
+            peers::peer::Peer,
         };
         use std::net::{Ipv4Addr, SocketAddrV4};
 
@@ -650,12 +650,11 @@ mod krpc_tests {
         }
     }
     mod decode {
-
         use super::super::Message;
         use crate::{
-            client::Peer,
             data_structures::ID,
             dht::krpc_message::{Arguments, Error, Nodes, Response, ValuesOrNodes},
+            peers::peer::Peer,
         };
         use std::net::{Ipv4Addr, SocketAddrV4};
 

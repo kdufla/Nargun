@@ -6,8 +6,9 @@ mod routing_table;
 
 use tracing::error;
 
-use crate::{client::Peers, data_structures::ID, shutdown};
 use std::net::SocketAddrV4;
+
+use crate::{data_structures::ID, peers::active_peers::Peers, shutdown};
 
 pub async fn start_dht(
     tcp_port: u16,

@@ -1,19 +1,16 @@
-use super::connection::{
-    AddBlockRes, ConMessageType, Connection, ConnectionMessage, Message, PendingPieces,
-};
 use crate::{
-    client::{FinishedPiece, BLOCK_SIZE},
-    data_structures::ID,
-    transcoding::metainfo::Torrent,
+    data_structures::ID, peers::connection::message::Message, transcoding::metainfo::Torrent,
 };
 use anyhow::{bail, Result};
 use std::{collections::HashMap, time::Duration};
-use tokio::{
-    select,
-    sync::mpsc,
-    time::{sleep},
-};
+use tokio::{select, sync::mpsc, time::sleep};
 use tracing::warn;
+
+use super::{
+    connection_handle::Connection,
+    connection_manager::{ConMessageType, ConnectionMessage, BLOCK_SIZE},
+    pending_pieces::{AddBlockRes, FinishedPiece, PendingPieces},
+};
 
 // TODO unwraps, no-text bails... just read/modify all of it
 

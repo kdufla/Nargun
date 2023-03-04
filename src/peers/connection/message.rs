@@ -1,12 +1,13 @@
-use super::BLOCK_SIZE;
-use crate::client::peer::BlockAddress;
 use crate::data_structures::NoSizeBytes;
-use anyhow::{Result};
+use anyhow::Result;
 use bincode::Options;
 use bytes::Bytes;
 use serde::ser::SerializeTuple;
 use serde::{Serialize, Serializer};
 use tracing::{debug, error, warn};
+
+use super::connection_manager::BLOCK_SIZE;
+use super::downloader::BlockAddress;
 
 pub const BYTES_IN_LEN: usize = 4;
 const ID_IDX: usize = 4;

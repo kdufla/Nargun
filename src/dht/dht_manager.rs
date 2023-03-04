@@ -6,8 +6,9 @@ use super::{
 };
 use crate::{
     capped_growing_interval::CappedGrowingInterval,
-    client::{Peer, Peers, COMPACT_PEER_LEN},
     data_structures::ID,
+    peers::active_peers::Peers,
+    peers::peer::{Peer, COMPACT_PEER_LEN},
     shutdown,
 };
 use anyhow::anyhow;

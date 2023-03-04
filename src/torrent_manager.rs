@@ -1,15 +1,21 @@
-use super::peer::connection::{
-    ConMessageType, Connection, ConnectionMessage, FinishedPiece, ManagerChannels, PendingPieces,
-};
-use super::peer::{manage_peer, PeerManagerCommand};
-use super::peer::{Peer, Peers, Status as PeerStatus};
 use crate::data_structures::{Bitmap, ID};
-
+use crate::peers::active_peers::{Peers, Status as PeerStatus};
+use crate::peers::connection::connection_handle::Connection;
+use crate::peers::connection::connection_manager::{
+    ConMessageType, ConnectionMessage, ManagerChannels,
+};
+use crate::peers::connection::downloader::{manage_peer, PeerManagerCommand};
+use crate::peers::connection::pending_pieces::{FinishedPiece, PendingPieces};
+use crate::peers::peer::Peer;
 use crate::transcoding::metainfo::Torrent;
+use crate::{shutdown, tracker};
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::net::SocketAddrV4;
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::broadcast;
 use tokio::{select, sync::mpsc, time::interval};
 use tracing::{debug, error, instrument, warn};
 
@@ -17,6 +23,29 @@ const MAX_ACTIVE_PEERS: usize = 10; // TODO this should come from config
 const MAX_ACTIVE_PIECES: usize = 9; // TODO this should come from config
 const MAX_PIECE_PER_PEER: usize = 4;
 const MAX_PEER_PER_PIECE: usize = 3;
+
+pub fn start_client(
+    client_id: ID,
+    peers: Peers,
+    dht_tx: mpsc::Sender<SocketAddrV4>,
+    torrent: Torrent,
+    pieces_downloaded: Arc<AtomicU64>,
+    tx: &broadcast::Sender<()>,
+    tcp_port: u16,
+    shutdown_rx: shutdown::Receiver,
+) {
+    tracker::spawn_tracker_managers(
+        &torrent,
+        &client_id,
+        &peers,
+        pieces_downloaded,
+        tx,
+        tcp_port,
+        shutdown_rx,
+    );
+
+    TorrentManager::spawn(torrent, client_id, peers, dht_tx);
+}
 
 // TODO ideally this must have its own Torrent with its peers and shit. Currently, my dht assumes just one torrent.
 // I know what you're thinking, future G, and no - I can't. Port message needs to know that there's a dht server running.

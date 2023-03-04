@@ -5,8 +5,8 @@ use super::{
 };
 use crate::{
     capped_growing_interval::CappedGrowingInterval,
-    client::Peers,
     data_structures::{NoSizeBytes, ID},
+    peers::active_peers::Peers,
 };
 use anyhow::bail;
 use std::{

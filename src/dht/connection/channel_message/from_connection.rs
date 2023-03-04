@@ -1,7 +1,7 @@
-use crate::client::Peer;
 use crate::data_structures::{NoSizeBytes, ID};
 use crate::dht::connection::QueryId;
 use crate::dht::krpc_message::{Nodes, ValuesOrNodes};
+use crate::peers::peer::Peer;
 use std::net::SocketAddrV4;
 
 #[derive(Debug)]

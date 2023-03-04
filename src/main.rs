@@ -1,16 +1,18 @@
 mod capped_growing_interval;
-mod client;
 mod config;
 mod data_structures;
 mod dht;
 mod fs;
 mod gateway_device;
 mod macros;
+mod peers;
 mod shutdown;
+mod torrent_manager;
+mod tracker;
 mod transcoding;
 
+use crate::peers::active_peers::Peers;
 use anyhow::Result;
-use client::{start_client, Peers};
 use data_structures::ID;
 use dht::start_dht;
 use std::sync::{atomic::AtomicU64, Arc};
@@ -18,6 +20,7 @@ use tokio::{
     signal,
     sync::{broadcast, mpsc},
 };
+use torrent_manager::start_client;
 use tracing::info;
 use transcoding::metainfo::Torrent;
 
@@ -74,17 +77,17 @@ async fn main() -> Result<()> {
     )
     .await;
 
-    // let (that_unknown_tx, _rx) = broadcast::channel(1 << 5);
-    // start_client(
-    //     client_id,
-    //     peers,
-    //     dht_tx,
-    //     torrent,
-    //     pieces_downloaded,
-    //     &that_unknown_tx,
-    //     tcp_port,
-    //     shutdown_rx.clone(),
-    // );
+    let (that_unknown_tx, _rx) = broadcast::channel(1 << 5);
+    start_client(
+        client_id,
+        peers,
+        dht_tx,
+        torrent,
+        pieces_downloaded,
+        &that_unknown_tx,
+        tcp_port,
+        shutdown_rx.clone(),
+    );
 
     // let _ = fs::FS::new("base_dir".to_string(), &torrent.info).await;
 

@@ -1,6 +1,7 @@
 use super::file_cache::FileCache;
 use super::multi_file_iter::FilesInBounds;
-use crate::client::{FinishedPiece, BLOCK_SIZE};
+use crate::peers::connection::connection_manager::BLOCK_SIZE;
+use crate::peers::connection::pending_pieces::FinishedPiece;
 use crate::transcoding::metainfo::{File as MetainfoFile, Info, Mode};
 use anyhow::{bail, Result};
 use std::collections::HashSet;
@@ -283,10 +284,9 @@ fn dirs_by_asc_depth(working_dir: &str, files: &[MetainfoFile]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::FS;
-    use crate::{
-        client::{FinishedPiece, BLOCK_SIZE},
-        transcoding::metainfo::Torrent,
-    };
+    use crate::peers::connection::connection_manager::BLOCK_SIZE;
+    use crate::peers::connection::pending_pieces::FinishedPiece;
+    use crate::transcoding::metainfo::Torrent;
     use rand::seq::IteratorRandom;
     use tokio::fs::{remove_dir_all, DirBuilder};
     use tracing_test::traced_test;

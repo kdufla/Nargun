@@ -1,7 +1,7 @@
 use super::announce::{Announce, AnnounceEvent};
 use super::response::Response;
-use crate::client::Peers;
 use crate::data_structures::ID;
+use crate::peers::active_peers::Peers;
 use crate::shutdown;
 use crate::transcoding::metainfo::Torrent;
 use anyhow::{anyhow, Result};

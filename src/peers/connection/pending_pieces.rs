@@ -1,7 +1,4 @@
-use super::BLOCK_SIZE;
-use crate::client::peer::BlockAddress;
-use crate::client::Peer;
-
+use crate::peers::peer::Peer;
 use crate::unsigned_ceil_div;
 use anyhow::{anyhow, bail, Result};
 use rand::seq::SliceRandom;
@@ -13,6 +10,9 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 use tracing::error;
+
+use super::connection_manager::BLOCK_SIZE;
+use super::downloader::BlockAddress;
 
 const MAX_PIECES_DOWNLOADING: usize = 10;
 const MAINLINE_TCP_REQUEST_TIMEOUT_SECS: u64 = 7;

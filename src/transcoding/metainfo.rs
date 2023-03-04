@@ -1,5 +1,5 @@
-use crate::client::BLOCK_SIZE;
 use crate::data_structures::{ID, ID_LEN};
+use crate::peers::connection::connection_manager::BLOCK_SIZE;
 use crate::{ok_or_missing_field, unsigned_ceil_div};
 use anyhow::{anyhow, Result};
 use bendy::decoding::{Decoder, FromBencode, Object};
@@ -416,7 +416,7 @@ impl fmt::Display for Torrent {
 #[cfg(test)]
 mod tests {
     use super::{Mode, Torrent, TrackerAddr};
-    use crate::client::BLOCK_SIZE;
+    use crate::peers::connection::connection_manager::BLOCK_SIZE;
     use crate::{data_structures::ID, unsigned_ceil_div};
     use std::fs;
     use std::io::Read;

@@ -1,11 +1,11 @@
 use super::channel_message::{FromConQuery, FromConResp, ToCon, ToConResp};
 use super::pending::PendingRequests;
-use crate::client::Peer;
 use crate::data_structures::ID;
 use crate::dht::krpc_message::Arguments;
 use crate::dht::krpc_message::Message;
 use crate::dht::krpc_message::Response;
 use crate::gateway_device::LOCAL_PORT_UDP;
+use crate::peers::peer::Peer;
 use bytes::Bytes;
 use std::borrow::Borrow;
 use std::net::SocketAddr;

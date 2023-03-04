@@ -1,9 +1,8 @@
 use super::handshake::initiate_handshake;
-use super::message::{Message, Piece, Request};
-use crate::client::peer::connection::BYTES_IN_LEN;
-use crate::client::Peer;
+use super::message::{Message, Piece, Request, BYTES_IN_LEN};
 use crate::data_structures::NoSizeBytes;
 use crate::data_structures::ID;
+use crate::peers::peer::Peer;
 use anyhow::Result;
 use std::mem::discriminant;
 use std::net::SocketAddrV4;
@@ -19,33 +18,9 @@ pub const BLOCK_SIZE: usize = 1 << 14;
 pub const DESCRIPTIVE_DATA_SIZE: usize = 1 << 7;
 pub const MAX_MESSAGE_BYTES: usize = BLOCK_SIZE + DESCRIPTIVE_DATA_SIZE;
 pub const KEEP_ALIVE_INTERVAL_SECS: u64 = 100;
-const MESSAGE_CHANNEL_BUFFER: usize = 1 << 5;
-
-pub struct Connection {
-    manager_tx: mpsc::Sender<Message>,
-}
-
-impl Connection {
-    pub fn new(peer: Peer, client_id: ID, info_hash: ID, managers: ManagerChannels) -> Self {
-        let (send_tx, send_rx) = mpsc::channel(MESSAGE_CHANNEL_BUFFER);
-
-        let send_tx_clone = send_tx.clone();
-        tokio::spawn(async move {
-            manage_tcp(client_id, peer, info_hash, managers, send_tx_clone, send_rx).await;
-        });
-
-        Self {
-            manager_tx: send_tx,
-        }
-    }
-
-    pub async fn send(&self, message: Message) -> Result<()> {
-        Ok(self.manager_tx.send(message).await?)
-    }
-}
 
 #[instrument(skip_all, fields(peer = peer.to_string()))]
-async fn manage_tcp(
+pub async fn manage_tcp(
     client_id: ID,
     peer: Peer,
     info_hash: ID,
