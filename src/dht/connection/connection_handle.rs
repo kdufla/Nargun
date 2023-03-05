@@ -1,9 +1,8 @@
 use super::channel_message::{FromCon, FromConQuery, FromConResp, ToCon, ToConQuery, ToConResp};
 use super::connection_manager::{ConnectionManager, QueryId};
 use super::error::Error;
-use crate::data_structures::ID;
+use crate::data_structures::{SerializableBuf, ID};
 use crate::dht::krpc_message::{Nodes, ValuesOrNodes};
-use bytes::Bytes;
 use std::net::SocketAddrV4;
 use tokio::sync::mpsc;
 
@@ -48,7 +47,7 @@ impl QueryingConnection {
         &self,
         info_hash: ID,
         port: u16,
-        token: Bytes,
+        token: SerializableBuf,
         target: SocketAddrV4,
     ) -> Result<(), Error> {
         self.send_query(

@@ -854,7 +854,6 @@ dependencies = [
  "anyhow",
  "bendy",
  "bincode",
- "bytes",
  "clap",
  "console-subscriber",
  "futures",

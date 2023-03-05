@@ -5,7 +5,7 @@ use super::{
 };
 use crate::{
     capped_growing_interval::CappedGrowingInterval,
-    data_structures::{NoSizeBytes, ID},
+    data_structures::{SerializableBuf, ID},
     peers::active_peers::Peers,
 };
 use anyhow::bail;
@@ -145,7 +145,7 @@ async fn announce_peer(
 
     for (addr, token) in sorted_known_nodes {
         connection
-            .send_announce_peer(info_hash, port, token.as_bytes(), *addr)
+            .send_announce_peer(info_hash, port, token.to_owned(), *addr)
             .await?
     }
 
@@ -199,8 +199,8 @@ async fn get_peers_from_new_nodes(
 #[derive(Debug, Clone)]
 enum NodeCloseToInfoHash {
     Unknown(ID),
-    HasPeers { id: ID, token: NoSizeBytes },
-    Peerless { id: ID, token: NoSizeBytes },
+    HasPeers { id: ID, token: SerializableBuf },
+    Peerless { id: ID, token: SerializableBuf },
 }
 
 impl Eq for NodeCloseToInfoHash {}
@@ -225,7 +225,7 @@ impl NodeCloseToInfoHash {
         }
     }
 
-    fn token(&self) -> Option<&NoSizeBytes> {
+    fn token(&self) -> Option<&SerializableBuf> {
         match self {
             NodeCloseToInfoHash::Unknown(_) => None,
             NodeCloseToInfoHash::HasPeers { token, .. } => Some(token),

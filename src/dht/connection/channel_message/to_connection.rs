@@ -1,8 +1,7 @@
 use super::FromConResp;
-use crate::data_structures::ID;
+use crate::data_structures::{SerializableBuf, ID};
 use crate::dht::connection::QueryId;
 use crate::dht::krpc_message::{rand_tid, Message, Nodes, ValuesOrNodes};
-use bytes::Bytes;
 use std::net::SocketAddrV4;
 use tokio::sync::mpsc;
 
@@ -31,7 +30,7 @@ pub enum ToConQuery {
     AnnouncePeer {
         info_hash: ID,
         port: u16,
-        token: Bytes,
+        token: SerializableBuf,
     },
 }
 
@@ -64,7 +63,12 @@ impl ToConQuery {
 }
 
 impl ToConResp {
-    pub fn into_message(self, own_node_id: &ID, transaction_id: Bytes, token: Bytes) -> Message {
+    pub fn into_message(
+        self,
+        own_node_id: &ID,
+        transaction_id: SerializableBuf,
+        token: SerializableBuf,
+    ) -> Message {
         match self {
             ToConResp::Ping => Message::ping_resp(own_node_id, transaction_id),
             ToConResp::FindNode { nodes } => {
@@ -80,17 +84,15 @@ impl ToConResp {
 
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddrV4;
-
     use super::{ToConQuery, ToConResp};
     use crate::{
-        data_structures::ID,
+        data_structures::{SerializableBuf, ID},
         dht::{
             krpc_message::{rand_tid, Message, Nodes},
             routing_table::Node,
         },
     };
-    use bytes::Bytes;
+    use std::net::SocketAddrV4;
 
     #[test]
     fn query_into_message() {
@@ -117,7 +119,7 @@ mod tests {
         let own_node_id = ID::new(rand::random());
         let secret = ID::new(rand::random());
 
-        let tid = Bytes::from_static(b"bytes");
+        let tid = SerializableBuf::from(b"bytes".as_ref());
         let nodes = Nodes::Exact(
             Node::from_compact_bytes("rdYAxWC9Zi!A97zKJUbH9HVcgP".as_bytes()).unwrap(),
         );
@@ -125,7 +127,7 @@ mod tests {
         let resp_command = ToConResp::FindNode {
             nodes: nodes.to_owned(),
         };
-        let token = secret.hash_as_bytes(
+        let token = secret.hash_with_secret(
             &"127.0.0.1:6969"
                 .parse::<SocketAddrV4>()
                 .unwrap()

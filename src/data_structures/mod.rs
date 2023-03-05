@@ -1,7 +1,7 @@
 mod bitmap;
 mod id;
-mod no_size_bytes;
+mod serializable_buf;
 
 pub use bitmap::Bitmap;
 pub use id::{ID, ID_BIT_COUNT, ID_LEN};
-pub use no_size_bytes::NoSizeBytes;
+pub use serializable_buf::SerializableBuf;

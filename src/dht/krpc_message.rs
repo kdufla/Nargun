@@ -1,11 +1,10 @@
 use super::routing_table::Node;
 use crate::{
-    data_structures::{NoSizeBytes, ID},
+    data_structures::{SerializableBuf, ID},
     dht::routing_table::COMPACT_NODE_LEN,
     peers::peer::Peer,
 };
 use anyhow::{anyhow, Result};
-use bytes::Bytes;
 use serde::{de::Unexpected, Deserialize, Deserializer, Serialize, Serializer};
 use std::str;
 
@@ -17,7 +16,7 @@ const MY_TID_LEN: usize = 5;
 pub enum Message {
     Query {
         #[serde(rename = "t")]
-        transaction_id: NoSizeBytes,
+        transaction_id: SerializableBuf,
         #[serde(rename = "y")]
         msg_type: MessageType,
         #[serde(rename = "q")]
@@ -27,7 +26,7 @@ pub enum Message {
     },
     Response {
         #[serde(rename = "t")]
-        transaction_id: NoSizeBytes,
+        transaction_id: SerializableBuf,
         #[serde(rename = "y")]
         msg_type: MessageType,
         #[serde(rename = "r")]
@@ -35,7 +34,7 @@ pub enum Message {
     },
     Error {
         #[serde(rename = "t")]
-        transaction_id: NoSizeBytes,
+        transaction_id: SerializableBuf,
         #[serde(rename = "y")]
         msg_type: MessageType,
         #[serde(rename = "e")]
@@ -50,7 +49,7 @@ pub enum Arguments {
         id: ID,
         info_hash: ID,
         port: u16,
-        token: NoSizeBytes,
+        token: SerializableBuf,
     },
     FindNode {
         id: ID,
@@ -70,7 +69,7 @@ pub enum Arguments {
 pub enum Response {
     GetPeers {
         id: ID,
-        token: NoSizeBytes,
+        token: SerializableBuf,
         #[serde(flatten)]
         values_or_nodes: ValuesOrNodes,
     },
@@ -107,8 +106,8 @@ pub enum Nodes {
 }
 
 #[inline(always)]
-pub fn rand_tid() -> NoSizeBytes {
-    NoSizeBytes::new(Bytes::from(Vec::from(rand::random::<[u8; MY_TID_LEN]>())))
+pub fn rand_tid() -> SerializableBuf {
+    SerializableBuf::from(rand::random::<[u8; MY_TID_LEN]>().as_ref())
 }
 
 // TODO I'm not a fan of these boilerplate methods. I'm not sure if it's bad, but you can think about it.
@@ -121,7 +120,7 @@ impl Message {
         bendy::serde::from_bytes::<Self>(buf).map_err(|e| anyhow!("{}", e))
     }
 
-    pub fn tid(&self) -> &NoSizeBytes {
+    pub fn tid(&self) -> &SerializableBuf {
         match self {
             Message::Query { transaction_id, .. } => transaction_id,
             Message::Response { transaction_id, .. } => transaction_id,
@@ -129,7 +128,7 @@ impl Message {
         }
     }
 
-    pub fn ping_query(id: &ID, transaction_id: NoSizeBytes) -> Self {
+    pub fn ping_query(id: &ID, transaction_id: SerializableBuf) -> Self {
         Self::Query {
             transaction_id,
             msg_type: MessageType(b'q'),
@@ -138,15 +137,15 @@ impl Message {
         }
     }
 
-    pub fn ping_resp(id: &ID, transaction_id: Bytes) -> Self {
+    pub fn ping_resp(id: &ID, transaction_id: SerializableBuf) -> Self {
         Self::Response {
-            transaction_id: NoSizeBytes::new(transaction_id),
+            transaction_id,
             msg_type: MessageType(b'r'),
             response: Response::Ping { id: id.to_owned() },
         }
     }
 
-    pub fn find_nodes_query(id: &ID, target: &ID, transaction_id: NoSizeBytes) -> Self {
+    pub fn find_nodes_query(id: &ID, target: &ID, transaction_id: SerializableBuf) -> Self {
         Self::Query {
             transaction_id,
             msg_type: MessageType(b'q'),
@@ -158,15 +157,15 @@ impl Message {
         }
     }
 
-    pub fn find_nodes_resp(id: &ID, nodes: Nodes, transaction_id: Bytes) -> Self {
+    pub fn find_nodes_resp(id: &ID, nodes: Nodes, transaction_id: SerializableBuf) -> Self {
         Self::Response {
-            transaction_id: NoSizeBytes::new(transaction_id),
+            transaction_id,
             msg_type: MessageType(b'r'),
             response: Response::FindNode { id: *id, nodes },
         }
     }
 
-    pub fn get_peers_query(id: &ID, info_hash: &ID, transaction_id: NoSizeBytes) -> Self {
+    pub fn get_peers_query(id: &ID, info_hash: &ID, transaction_id: SerializableBuf) -> Self {
         Self::Query {
             transaction_id,
             msg_type: MessageType(b'q'),
@@ -180,16 +179,16 @@ impl Message {
 
     pub fn get_peers_resp(
         id: &ID,
-        token: Bytes,
+        token: SerializableBuf,
         values_or_nodes: ValuesOrNodes,
-        transaction_id: Bytes,
+        transaction_id: SerializableBuf,
     ) -> Self {
         Self::Response {
-            transaction_id: NoSizeBytes::new(transaction_id),
+            transaction_id,
             msg_type: MessageType(b'r'),
             response: Response::GetPeers {
                 id: id.to_owned(),
-                token: NoSizeBytes::new(token),
+                token,
                 values_or_nodes,
             },
         }
@@ -199,8 +198,8 @@ impl Message {
         id: &ID,
         info_hash: &ID,
         port: u16,
-        token: Bytes,
-        transaction_id: NoSizeBytes,
+        token: SerializableBuf,
+        transaction_id: SerializableBuf,
     ) -> Self {
         Self::Query {
             transaction_id,
@@ -210,22 +209,22 @@ impl Message {
                 id: id.to_owned(),
                 info_hash: info_hash.to_owned(),
                 port,
-                token: NoSizeBytes::new(token),
+                token,
             },
         }
     }
 
-    pub fn announce_peer_resp(id: &ID, transaction_id: Bytes) -> Self {
+    pub fn announce_peer_resp(id: &ID, transaction_id: SerializableBuf) -> Self {
         Self::Response {
-            transaction_id: NoSizeBytes::new(transaction_id),
+            transaction_id,
             msg_type: MessageType(b'r'),
             response: Response::AnnouncePeer { id: id.to_owned() },
         }
     }
 
-    pub fn _error_resp(error: Vec<Error>, transaction_id: Bytes) -> Self {
+    pub fn _error_resp(error: Vec<Error>, transaction_id: SerializableBuf) -> Self {
         Self::Error {
-            transaction_id: NoSizeBytes::new(transaction_id),
+            transaction_id,
             msg_type: MessageType(b'e'),
             error,
         }
@@ -400,7 +399,7 @@ mod krpc_tests {
 
     macro_rules! encoded_with_custom_tid {
         ($start:expr, $tid:expr) => {{
-            let mut encoded = $start.as_bytes().to_vec();
+            let mut encoded = $start.to_vec();
 
             encoded.push(0x30 + $tid.len() as u8);
             encoded.push(b':');
@@ -431,11 +430,9 @@ mod krpc_tests {
     }
 
     mod encode {
-        use bytes::Bytes;
-
         use super::super::Message;
         use crate::{
-            data_structures::ID,
+            data_structures::{SerializableBuf, ID},
             dht::{
                 krpc_message::{rand_tid, Error, Nodes, ValuesOrNodes},
                 routing_table::Node,
@@ -450,13 +447,16 @@ mod krpc_tests {
                 Message::ping_query(&ID::new(b"abcdefghij0123456789".to_owned()), rand_tid());
 
             let tid = match &message {
-                Message::Query { transaction_id, .. } => transaction_id.as_bytes(),
+                Message::Query { transaction_id, .. } => transaction_id,
                 _ => panic!("expected Message::Query"),
             };
 
             assert_eq!(
                 bendy::serde::to_bytes(&message).unwrap(),
-                encoded_with_custom_tid!("d1:ad2:id20:abcdefghij0123456789e1:q4:ping1:t", tid)
+                encoded_with_custom_tid!(
+                    b"d1:ad2:id20:abcdefghij0123456789e1:q4:ping1:t",
+                    tid.to_owned()
+                )
             );
         }
 
@@ -464,7 +464,7 @@ mod krpc_tests {
         fn ping_resp() {
             let message = Message::ping_resp(
                 &ID::new(b"mnopqrstuvwxyz123456".to_owned()),
-                Bytes::from_static(b"aa"),
+                SerializableBuf::from(b"aa".as_ref()),
             );
 
             assert_eq!(
@@ -482,15 +482,15 @@ mod krpc_tests {
             );
 
             let tid = match &message {
-                Message::Query { transaction_id, .. } => transaction_id.as_bytes(),
+                Message::Query { transaction_id, .. } => transaction_id,
                 _ => panic!("expected Message::Query"),
             };
 
             assert_eq!(
                 bendy::serde::to_bytes(&message).unwrap(),
                 encoded_with_custom_tid!(
-                    "d1:ad2:id20:abcdefghij01234567896:target20:mnopqrstuvwxyz123456e1:q9:find_node1:t",
-                    tid
+                    b"d1:ad2:id20:abcdefghij01234567896:target20:mnopqrstuvwxyz123456e1:q9:find_node1:t",
+                    tid.to_owned()
                 )
             );
         }
@@ -504,7 +504,7 @@ mod krpc_tests {
                     Node::from_compact_bytes(b"7Z5cQScmZcC4M2hYKy!JrcYPtT").unwrap(),
                     Node::from_compact_bytes(b"9^jy^pm8sZQy3dukB$CF9^o@of").unwrap(),
                 ]),
-                Bytes::from_static(b"aa"),
+                SerializableBuf::from(b"aa".as_ref()),
             );
 
             assert_eq!(
@@ -518,7 +518,7 @@ mod krpc_tests {
             let message = Message::find_nodes_resp(
                 &ID::new(b"0123456789abcdefghij".to_owned()),
                 Nodes::Exact(Node::from_compact_bytes(b"rdYAxWC9Zi!A97zKJUbH9HVcgP").unwrap()),
-                Bytes::from_static(b"aa"),
+                SerializableBuf::from(b"aa".as_ref()),
             );
 
             assert_eq!(
@@ -536,15 +536,15 @@ mod krpc_tests {
             );
 
             let tid = match &message {
-                Message::Query { transaction_id, .. } => transaction_id.as_bytes(),
+                Message::Query { transaction_id, .. } => transaction_id,
                 _ => panic!("expected Message::Query"),
             };
 
             assert_eq!(
                 bendy::serde::to_bytes(&message).unwrap(),
                 encoded_with_custom_tid!(
-                    "d1:ad2:id20:abcdefghij01234567899:info_hash20:mnopqrstuvwxyz123456e1:q9:get_peers1:t",
-                    tid
+                    b"d1:ad2:id20:abcdefghij01234567899:info_hash20:mnopqrstuvwxyz123456e1:q9:get_peers1:t",
+                    tid.to_owned()
                 )
             );
         }
@@ -553,7 +553,7 @@ mod krpc_tests {
         fn get_peers_resp_vals() {
             let message = Message::get_peers_resp(
                 &ID::new(b"abcdefghij0123456789".to_owned()),
-                Bytes::from_static(b"aoeusnth"),
+                SerializableBuf::from(b"aoeusnth".as_ref()),
                 ValuesOrNodes::Values {
                     values: vec![
                         Peer::new(SocketAddrV4::new(
@@ -566,7 +566,7 @@ mod krpc_tests {
                         )),
                     ],
                 },
-                Bytes::from_static(b"aa"),
+                SerializableBuf::from(b"aa".as_ref()),
             );
 
             assert_eq!(
@@ -579,7 +579,7 @@ mod krpc_tests {
         fn get_peers_resp_nodes() {
             let message = Message::get_peers_resp(
                 &ID::new(b"abcdefghij0123456789".to_owned()),
-                Bytes::from_static(b"aoeusnth"),
+                SerializableBuf::from(b"aoeusnth".as_ref()),
                 ValuesOrNodes::Nodes {
                     nodes: Nodes::Closest(vec![
                         Node::from_compact_bytes(b"rdYAxWC9Zi!A97zKJUbH9HVcgP").unwrap(),
@@ -587,7 +587,7 @@ mod krpc_tests {
                         Node::from_compact_bytes(b"9^jy^pm8sZQy3dukB$CF9^o@of").unwrap(),
                     ]),
                 },
-                Bytes::from_static(b"aa"),
+                SerializableBuf::from(b"aa".as_ref()),
             );
 
             assert_eq!(
@@ -602,20 +602,20 @@ mod krpc_tests {
                 &ID::new(b"abcdefghij0123456789".to_owned()),
                 &ID::new(b"mnopqrstuvwxyz123456".to_owned()),
                 6881,
-                Bytes::from_static(b"aoeusnth"),
+                SerializableBuf::from(b"aoeusnth".as_ref()),
                 rand_tid(),
             );
 
             let tid = match &message {
-                Message::Query { transaction_id, .. } => transaction_id.as_bytes(),
+                Message::Query { transaction_id, .. } => transaction_id,
                 _ => panic!("expected Message::Query"),
             };
 
             assert_eq!(
                 bendy::serde::to_bytes(&message).unwrap(),
                 encoded_with_custom_tid!(
-                    "d1:ad2:id20:abcdefghij01234567899:info_hash20:mnopqrstuvwxyz1234564:porti6881e5:token8:aoeusnthe1:q13:announce_peer1:t",
-                    tid
+                    b"d1:ad2:id20:abcdefghij01234567899:info_hash20:mnopqrstuvwxyz1234564:porti6881e5:token8:aoeusnthe1:q13:announce_peer1:t",
+                    tid.to_owned()
                 )
             );
         }
@@ -624,7 +624,7 @@ mod krpc_tests {
         fn announce_peer_resp() {
             let message = Message::announce_peer_resp(
                 &ID::new(b"mnopqrstuvwxyz123456".to_owned()),
-                Bytes::from_static(b"aa"),
+                SerializableBuf::from(b"aa".as_ref()),
             );
 
             assert_eq!(
@@ -640,7 +640,7 @@ mod krpc_tests {
                     Error::Code(201),
                     Error::Desc("A Generic Error Ocurred".to_string()),
                 ],
-                Bytes::from_static(b"aa"),
+                SerializableBuf::from(b"aa".as_ref()),
             );
 
             assert_eq!(
@@ -672,7 +672,7 @@ mod krpc_tests {
                 panic!("message should be Message::Query");
             };
 
-            assert_eq!(t.as_ref(), b"aa");
+            assert_eq!(t.as_ref(), b"aa".as_ref());
             assert_eq!(y.0, b'q',);
             assert_eq!(q, "ping");
 
@@ -696,7 +696,7 @@ mod krpc_tests {
                 panic!("message should be Message::Response");
             };
 
-            assert_eq!(t.as_ref(), b"aa");
+            assert_eq!(t.as_ref(), b"aa".as_ref());
             assert_eq!(y.0, b'r');
 
             let Response::Ping { id } = r else {
@@ -721,7 +721,7 @@ mod krpc_tests {
                 panic!("message should be Message::Query");
             };
 
-            assert_eq!(t.as_ref(), b"aa");
+            assert_eq!(t.as_ref(), b"aa".as_ref());
             assert_eq!(y.0, b'q',);
             assert_eq!(q, "find_node");
 
@@ -747,7 +747,7 @@ mod krpc_tests {
                 panic!("message should be Message::Response");
             };
 
-            assert_eq!(t.as_ref(), b"aa");
+            assert_eq!(t.as_ref(), b"aa".as_ref());
             assert_eq!(y.0, b'r');
 
             let Response::FindNode { id, nodes } = r else {
@@ -778,7 +778,7 @@ mod krpc_tests {
                 panic!("message should be Message::Response");
             };
 
-            assert_eq!(t.as_ref(), b"aa");
+            assert_eq!(t.as_ref(), b"aa".as_ref());
             assert_eq!(y.0, b'r');
 
             let Response::FindNode { id, nodes } = r else {
@@ -809,7 +809,7 @@ mod krpc_tests {
                 panic!("message should be Message::Query");
             };
 
-            assert_eq!(t.as_ref(), b"aa");
+            assert_eq!(t.as_ref(), b"aa".as_ref());
             assert_eq!(y.0, b'q',);
             assert_eq!(q, "get_peers");
 
@@ -835,7 +835,7 @@ mod krpc_tests {
                 panic!("message should be Message::Response");
             };
 
-            assert_eq!(t.as_ref(), b"aa");
+            assert_eq!(t.as_ref(), b"aa".as_ref());
             assert_eq!(y.0, b'r');
 
             let Response::GetPeers {
@@ -847,7 +847,7 @@ mod krpc_tests {
             };
 
             assert_eq!(ID::new(b"abcdefghij0123456789".to_owned()), id);
-            assert_eq!(token.as_ref(), b"aoeusnth");
+            assert_eq!(token.as_ref(), b"aoeusnth".as_ref());
 
             let ValuesOrNodes::Values { values } = values_or_nodes else {
                 panic!("expected values (peers)");
@@ -884,7 +884,7 @@ mod krpc_tests {
                 panic!("message should be Message::Response");
             };
 
-            assert_eq!(t.as_ref(), b"aa");
+            assert_eq!(t.as_ref(), b"aa".as_ref());
             assert_eq!(y.0, b'r');
 
             let Response::GetPeers {
@@ -896,7 +896,7 @@ mod krpc_tests {
             };
 
             assert_eq!(ID::new(b"abcdefghij0123456789".to_owned()), id);
-            assert_eq!(token.as_ref(), b"aoeusnth");
+            assert_eq!(token.as_ref(), b"aoeusnth".as_ref());
 
             let ValuesOrNodes::Nodes { nodes } = values_or_nodes else {
                 panic!("expected nodes");
@@ -925,7 +925,7 @@ mod krpc_tests {
                 panic!("message should be Message::Query");
             };
 
-            assert_eq!(t.as_ref(), b"aa");
+            assert_eq!(t.as_ref(), b"aa".as_ref());
             assert_eq!(y.0, b'q',);
             assert_eq!(q, "announce_peer");
 
@@ -940,7 +940,7 @@ mod krpc_tests {
 
             assert_eq!(ID::new(b"abcdefghij0123456789".to_owned()), id);
             assert_eq!(ID::new(b"mnopqrstuvwxyz123456".to_owned()), info_hash);
-            assert_eq!(b"aoeusnth", token.as_ref());
+            assert_eq!(b"aoeusnth".as_ref(), token.as_ref());
             assert_eq!(6881, port);
         }
 
@@ -966,7 +966,7 @@ mod krpc_tests {
                 panic!("message should be Message::Error");
             };
 
-            assert_eq!(t.as_ref(), b"aa");
+            assert_eq!(t.as_ref(), b"aa".as_ref());
             assert_eq!(y.0, b'e');
 
             match e[0] {

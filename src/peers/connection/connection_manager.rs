@@ -1,7 +1,7 @@
 use super::handshake::initiate_handshake;
 use super::message::{Message, Piece, Request, BYTES_IN_LEN_PREFIX};
 use super::pending_pieces::FinishedPiece;
-use crate::data_structures::NoSizeBytes;
+use crate::data_structures::SerializableBuf;
 use crate::data_structures::ID;
 use crate::peers::peer::Peer;
 use crate::shutdown;
@@ -188,7 +188,7 @@ pub enum ConMessageType {
     Interested,
     NotInterested,
     Have(u32),
-    Bitfield(NoSizeBytes),
+    Bitfield(SerializableBuf),
     Request(Request),
     FinishedPiece(FinishedPiece),
     Cancel(Request),

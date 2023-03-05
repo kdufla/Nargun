@@ -151,7 +151,7 @@ async fn foo(
         };
     let mut removed_block_addr = current_blocks.remove(idx);
 
-    match pending_pieces.add_block_data(piece_idx, block_idx, block.block.as_bytes().into()) {
+    match pending_pieces.add_block_data(piece_idx, block_idx, block.block.into_vec().into()) {
         AddBlockRes::Added => todo!(),
         AddBlockRes::Failed => {
             removed_block_addr.status = BlockStatus::Queued;

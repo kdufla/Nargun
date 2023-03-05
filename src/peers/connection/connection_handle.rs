@@ -2,7 +2,7 @@ use super::connection_manager::{spawn_connection_manager, ConMessageType, Connec
 use super::downloader::{spawn_piece_downloader, PeerManagerCommand};
 use super::message::{Message, Piece, Request};
 use super::pending_pieces::PendingPieces;
-use crate::data_structures::{NoSizeBytes, ID};
+use crate::data_structures::{SerializableBuf, ID};
 use crate::peers::peer::Peer;
 use crate::shutdown;
 use anyhow::{bail, Result};
@@ -211,7 +211,7 @@ impl Connection {
         self.send_message(peer, message).await
     }
 
-    pub async fn bitfield(&self, peer: Peer, v: NoSizeBytes) -> Result<()> {
+    pub async fn bitfield(&self, peer: Peer, v: SerializableBuf) -> Result<()> {
         let message = Message::Bitfield(v);
         self.send_message(peer, message).await
     }

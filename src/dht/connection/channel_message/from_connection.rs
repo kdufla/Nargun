@@ -1,4 +1,4 @@
-use crate::data_structures::{NoSizeBytes, ID};
+use crate::data_structures::{SerializableBuf, ID};
 use crate::dht::connection::QueryId;
 use crate::dht::krpc_message::{Nodes, ValuesOrNodes};
 use crate::peers::peer::Peer;
@@ -30,7 +30,7 @@ pub enum FromConResp {
     },
     GetPeers {
         from: SocketAddrV4,
-        token: NoSizeBytes,
+        token: SerializableBuf,
         v_or_n: ValuesOrNodes,
     },
 }

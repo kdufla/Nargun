@@ -1,11 +1,13 @@
 use super::channel_message::FromConResp;
-use crate::dht::krpc_message::{Arguments, Message, Response};
-use bytes::Bytes;
+use crate::{
+    data_structures::SerializableBuf,
+    dht::krpc_message::{Arguments, Message, Response},
+};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
 #[derive(Clone, Debug)]
-pub struct PendingRequests(HashMap<Bytes, (RequestType, Requester)>);
+pub struct PendingRequests(HashMap<SerializableBuf, (RequestType, Requester)>);
 
 type Requester = mpsc::Sender<FromConResp>;
 
@@ -22,7 +24,7 @@ impl PendingRequests {
         Self(HashMap::new())
     }
 
-    pub fn get(&mut self, tid: &Bytes, response_type: RequestType) -> Option<Requester> {
+    pub fn get(&mut self, tid: &SerializableBuf, response_type: RequestType) -> Option<Requester> {
         let (requested_type, _) = self.0.get(tid)?;
 
         if *requested_type == response_type {
@@ -32,7 +34,7 @@ impl PendingRequests {
         }
     }
 
-    pub fn insert(&mut self, tid: Bytes, req_type: RequestType, requester: Requester) {
+    pub fn insert(&mut self, tid: SerializableBuf, req_type: RequestType, requester: Requester) {
         self.0.insert(tid, (req_type, requester));
     }
 }
@@ -67,10 +69,9 @@ impl From<&Response> for RequestType {
 mod tests {
     use super::RequestType;
     use crate::{
-        data_structures::{ID, ID_LEN},
+        data_structures::{SerializableBuf, ID, ID_LEN},
         dht::krpc_message::{rand_tid, Message},
     };
-    use bytes::Bytes;
 
     #[test]
     fn from_message() {
@@ -88,8 +89,10 @@ mod tests {
     #[test]
     #[should_panic]
     fn from_message_panic() {
-        let message =
-            Message::announce_peer_resp(&ID::new([0; ID_LEN]), Bytes::from_static(b"bytes"));
+        let message = Message::announce_peer_resp(
+            &ID::new([0; ID_LEN]),
+            SerializableBuf::from(b"bytes".as_ref()),
+        );
 
         let _: RequestType = (&message).into();
     }
@@ -98,7 +101,7 @@ mod tests {
     fn from_response() {
         let response = match Message::announce_peer_resp(
             &ID::new([0; ID_LEN]),
-            Bytes::from_static(b"bytes"),
+            SerializableBuf::from(b"bytes".as_ref()),
         ) {
             Message::Response { response, .. } => response,
             _ => panic!("message should be a response"),

@@ -1,4 +1,3 @@
-use bytes::Bytes;
 use openssl::sha;
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -8,6 +7,8 @@ use std::{
     fmt,
     ops::{BitXor, Sub},
 };
+
+use super::SerializableBuf;
 
 pub const ID_LEN: usize = 20;
 pub const ID_BIT_COUNT: usize = ID_LEN * 8;
@@ -123,11 +124,11 @@ impl ID {
         }
     }
 
-    pub fn hash_as_bytes(&self, secret: &[u8]) -> Bytes {
+    pub fn hash_with_secret(&self, secret: &[u8]) -> SerializableBuf {
         let mut hasher = sha::Sha1::new();
         hasher.update(self.as_byte_ref());
         hasher.update(secret);
-        Bytes::from(Vec::from(hasher.finish()))
+        SerializableBuf::from(hasher.finish())
     }
 
     pub fn as_byte_ref(&self) -> &[u8] {

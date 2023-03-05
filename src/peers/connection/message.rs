@@ -1,7 +1,6 @@
-use crate::data_structures::NoSizeBytes;
+use crate::data_structures::SerializableBuf;
 use anyhow::Result;
 use bincode::Options;
-use bytes::Bytes;
 use serde::ser::SerializeTuple;
 use serde::{Serialize, Serializer};
 use tracing::{debug, error, warn};
@@ -47,7 +46,7 @@ pub enum Message {
     Interested,
     NotInterested,
     Have(u32),
-    Bitfield(NoSizeBytes),
+    Bitfield(SerializableBuf),
     Request(Request),
     Piece(Piece),
     Cancel(Request),
@@ -65,7 +64,7 @@ pub struct Request {
 pub struct Piece {
     pub index: u32,
     pub begin: u32,
-    pub block: NoSizeBytes,
+    pub block: SerializableBuf,
 }
 
 macro_rules! u32_from_be_slice {
@@ -115,9 +114,7 @@ impl Message {
                 INTERESTED_ID => Message::Interested,
                 NOT_INTERESTED_ID => Message::NotInterested,
                 HAVE_ID => Message::Have(u32_from_be_slice!(buf[FIRST_NUM_START..])),
-                BITFIELD_ID => Message::Bitfield(NoSizeBytes::new(Bytes::copy_from_slice(
-                    &buf[BITFIELD_START..len],
-                ))),
+                BITFIELD_ID => Message::Bitfield(SerializableBuf::from(&buf[BITFIELD_START..len])),
                 REQUEST_ID => Message::Request(Request {
                     index: u32_from_be_slice!(buf[FIRST_NUM_START..]),
                     begin: u32_from_be_slice!(buf[SECOND_NUM_START..]),
@@ -146,14 +143,12 @@ impl Message {
         Some(message)
     }
 
-    pub fn into_bytes(self) -> Bytes {
-        Bytes::from(
-            bincode::DefaultOptions::new()
-                .with_big_endian()
-                .with_fixint_encoding()
-                .serialize(&self)
-                .unwrap(),
-        )
+    pub fn into_bytes(self) -> Vec<u8> {
+        bincode::DefaultOptions::new()
+            .with_big_endian()
+            .with_fixint_encoding()
+            .serialize(&self)
+            .unwrap()
     }
 }
 
@@ -245,7 +240,7 @@ impl Piece {
         Piece {
             index,
             begin,
-            block: NoSizeBytes::new(Bytes::copy_from_slice(block)),
+            block: SerializableBuf::from(block),
         }
     }
 
@@ -267,8 +262,7 @@ impl From<BlockAddress> for Request {
 #[cfg(test)]
 mod tests {
     use super::{Message, Piece, Request};
-    use crate::data_structures::NoSizeBytes;
-    use bytes::Bytes;
+    use crate::data_structures::SerializableBuf;
 
     fn long_buf_from_message_slice(raw_message: &[u8]) -> [u8; 1 << 6] {
         let mut buf = [0u8; 1 << 6];
@@ -285,7 +279,7 @@ mod tests {
 
         let bytes = message.into_bytes();
 
-        assert_eq!(&buf[..raw_message.len()], bytes.as_ref());
+        assert_eq!(&buf[..raw_message.len()], &bytes);
     }
 
     #[test]
@@ -341,7 +335,7 @@ mod tests {
 
         let bitfield = &raw_message[5..];
 
-        let message = Message::Bitfield(NoSizeBytes::new(Bytes::copy_from_slice(bitfield)));
+        let message = Message::Bitfield(SerializableBuf::from(bitfield));
 
         test_message_ser_de(&raw_message, message);
     }
@@ -377,7 +371,7 @@ mod tests {
         raw_message[5..9].copy_from_slice(&index.to_be_bytes());
         raw_message[9..13].copy_from_slice(&begin.to_be_bytes());
 
-        let block = NoSizeBytes::new(Bytes::copy_from_slice(&raw_message[13..]));
+        let block = SerializableBuf::from(&raw_message[13..]);
 
         let message = Message::Piece(Piece {
             index,

@@ -1,18 +1,12 @@
 use super::channel_message::{FromConQuery, FromConResp, ToCon, ToConResp};
 use super::pending::PendingRequests;
-use crate::data_structures::ID;
-use crate::dht::krpc_message::Arguments;
-use crate::dht::krpc_message::Message;
-use crate::dht::krpc_message::Response;
+use crate::data_structures::{SerializableBuf, ID};
+use crate::dht::krpc_message::{Arguments, Message, Response};
 use crate::gateway_device::LOCAL_PORT_UDP;
 use crate::peers::peer::Peer;
-use bytes::Bytes;
 use std::borrow::Borrow;
-use std::net::SocketAddr;
-use std::net::SocketAddrV4;
-use tokio::net::UdpSocket;
-use tokio::select;
-use tokio::sync::mpsc;
+use std::net::{SocketAddr, SocketAddrV4};
+use tokio::{net::UdpSocket, select, sync::mpsc};
 use tracing::{error, info, instrument, warn};
 
 pub const MTU: usize = 1300;
@@ -29,7 +23,7 @@ pub struct ConnectionManager {
 #[derive(Debug)]
 pub struct QueryId {
     target: SocketAddrV4,
-    transaction_id: Bytes,
+    transaction_id: SerializableBuf,
 }
 
 impl ConnectionManager {
@@ -82,12 +76,12 @@ impl ConnectionManager {
             } => {
                 let message = variant.into_message(&self.own_id);
                 self.pending
-                    .insert(message.tid().as_bytes(), (&message).into(), resp_returner);
+                    .insert(message.tid().to_owned(), (&message).into(), resp_returner);
 
                 (message, target)
             }
             ToCon::Resp { query_id, variant } => {
-                let token = self.secret.hash_as_bytes(&query_id.target.ip().octets());
+                let token = self.secret.hash_with_secret(&query_id.target.ip().octets());
                 let message = variant.into_message(&self.own_id, query_id.transaction_id, token);
 
                 (message, query_id.target)
@@ -126,25 +120,19 @@ impl ConnectionManager {
                 transaction_id,
                 arguments,
                 ..
-            } => {
-                self.handle_query(transaction_id.into_bytes(), arguments, from)
-                    .await
-            }
+            } => self.handle_query(transaction_id, arguments, from).await,
             Message::Response {
                 transaction_id,
                 response,
                 ..
-            } => {
-                self.handle_resp(transaction_id.into_bytes(), response, from)
-                    .await
-            }
+            } => self.handle_resp(transaction_id, response, from).await,
             Message::Error { .. } => (),
         }
     }
 
     async fn handle_query(
         &mut self,
-        transaction_id: Bytes,
+        transaction_id: SerializableBuf,
         arguments: Arguments,
         from: SocketAddrV4,
     ) {
@@ -190,7 +178,7 @@ impl ConnectionManager {
                 token,
                 ..
             } => {
-                if self.token_is_valid(token.into_bytes(), &from) {
+                if self.token_is_valid(token, &from) {
                     let mut peer_addr = from;
                     peer_addr.set_port(port);
 
@@ -216,11 +204,16 @@ impl ConnectionManager {
         }
     }
 
-    fn token_is_valid(&self, token: Bytes, source_addr: &SocketAddrV4) -> bool {
-        token == self.secret.hash_as_bytes(&source_addr.ip().octets())
+    fn token_is_valid(&self, token: SerializableBuf, source_addr: &SocketAddrV4) -> bool {
+        token == self.secret.hash_with_secret(&source_addr.ip().octets())
     }
 
-    async fn handle_resp(&mut self, transaction_id: Bytes, response: Response, from: SocketAddrV4) {
+    async fn handle_resp(
+        &mut self,
+        transaction_id: SerializableBuf,
+        response: Response,
+        from: SocketAddrV4,
+    ) {
         let Some(querying_task_channel) =
             self.pending.get(&transaction_id, response.borrow().into())
         else {
