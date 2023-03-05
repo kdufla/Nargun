@@ -155,7 +155,7 @@ impl PendingPieces {
                 Self::filtered_iter_over_blocks(&pieces, &mut data, filter)
             {
                 *block = Block::Pending(PendingBlockDesc {
-                    target: self.copy_owner.unwrap(),
+                    target: self.copy_owner.unwrap(), // TODO wtf is this? NO!
                     time_sent: now,
                 });
 

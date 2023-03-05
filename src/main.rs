@@ -57,7 +57,7 @@ async fn main() -> Result<()> {
     // console_subscriber::init();
 
     // env::set_var("RUST_BACKTRACE", "1");
-    let client_id = ID::new(rand::random());
+    let own_peer_id = ID::new(rand::random());
 
     let (shutdown_tx, shutdown_rx) = shutdown::channel();
 
@@ -79,7 +79,7 @@ async fn main() -> Result<()> {
 
     let (that_unknown_tx, _rx) = broadcast::channel(1 << 5);
     start_client(
-        client_id,
+        own_peer_id,
         peers,
         dht_tx,
         torrent,

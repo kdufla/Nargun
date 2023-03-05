@@ -9,7 +9,7 @@ use tracing::{debug, error, warn};
 use super::connection_manager::BLOCK_SIZE;
 use super::downloader::BlockAddress;
 
-pub const BYTES_IN_LEN: usize = 4;
+pub const BYTES_IN_LEN_PREFIX: usize = 4;
 const ID_IDX: usize = 4;
 const BITFIELD_START: usize = 5;
 const BLOCK_START: usize = 13;
@@ -79,12 +79,12 @@ macro_rules! u32_from_be_slice {
 
 impl Message {
     pub fn len(buf: &[u8]) -> usize {
-        u32_from_be_slice!(buf[0..BYTES_IN_LEN]) as usize
+        u32_from_be_slice!(buf[0..BYTES_IN_LEN_PREFIX]) as usize
     }
 
     pub fn from_buf(buf: &[u8]) -> Option<Self> {
-        let len = u32_from_be_slice!(buf[0..BYTES_IN_LEN]);
-        let len: usize = len as usize + BYTES_IN_LEN;
+        let len = u32_from_be_slice!(buf[0..BYTES_IN_LEN_PREFIX]);
+        let len: usize = len as usize + BYTES_IN_LEN_PREFIX;
 
         if buf.len() < len {
             let first_zeros = buf
@@ -98,13 +98,13 @@ impl Message {
                 })
                 .map(|idx| idx * 5);
 
-            error!("message len ({len}) is more than provided buffer {}. first three consecutive zeros are at {:?} (+-4)",
+            error!("message len ({len}) is more than provided buffer {}. first five consecutive zeros are at {:?} (+-4)",
                 buf.len(), first_zeros);
 
             return None;
         }
 
-        let message = if len == BYTES_IN_LEN {
+        let message = if len == BYTES_IN_LEN_PREFIX {
             Message::KeepAlive
         } else {
             let id = buf[ID_IDX];

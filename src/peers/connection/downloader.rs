@@ -1,18 +1,19 @@
+use super::{
+    connection_handle::UnchokeWaiter,
+    connection_manager::{ConMessageType, ConnectionMessage, BLOCK_SIZE},
+    message::Piece,
+    pending_pieces::{AddBlockRes, PendingPieces},
+};
 use crate::{
-    data_structures::ID, peers::connection::message::Message, transcoding::metainfo::Torrent,
+    data_structures::ID,
+    peers::{connection::message::Message, peer::Peer},
+    shutdown,
+    transcoding::metainfo::Torrent,
 };
 use anyhow::{bail, Result};
 use std::{collections::HashMap, time::Duration};
 use tokio::{select, sync::mpsc, time::sleep};
 use tracing::warn;
-
-use super::{
-    connection_handle::Connection,
-    connection_manager::{ConMessageType, ConnectionMessage, BLOCK_SIZE},
-    pending_pieces::{AddBlockRes, FinishedPiece, PendingPieces},
-};
-
-// TODO unwraps, no-text bails... just read/modify all of it
 
 const ACTIVE_BLOCKS_PER_PEER: usize = 16;
 
@@ -45,12 +46,40 @@ impl BlockAddress {
     }
 }
 
-pub async fn manage_peer(
+pub fn spawn_piece_downloader(
+    peer: Peer,
+    send_tx: mpsc::Sender<Message>,
+    finished_piece_tx: mpsc::Sender<ConnectionMessage>,
+    downloaded_block_rx: mpsc::Receiver<Piece>,
+    new_piece_rx: mpsc::Receiver<PeerManagerCommand>,
+    pending_pieces: PendingPieces,
+    unchoke_waiter: UnchokeWaiter,
+    shutdown_rx: shutdown::Receiver,
+) {
+    tokio::spawn(async move {
+        manage_piece_downloader(
+            peer,
+            send_tx,
+            finished_piece_tx,
+            downloaded_block_rx,
+            new_piece_rx,
+            pending_pieces,
+            unchoke_waiter,
+            shutdown_rx,
+        )
+        .await;
+    });
+}
+
+async fn manage_piece_downloader(
+    peer: Peer,
+    send_tx: mpsc::Sender<Message>,
+    finished_piece_tx: mpsc::Sender<ConnectionMessage>,
+    mut downloaded_block_rx: mpsc::Receiver<Piece>,
     mut new_piece_rx: mpsc::Receiver<PeerManagerCommand>,
-    mut download_manager_rx: mpsc::Receiver<ConnectionMessage>,
     mut pending_pieces: PendingPieces,
-    finished_piece_tx: mpsc::Sender<FinishedPiece>,
-    connection: Connection,
+    mut unchoke_waiter: UnchokeWaiter,
+    mut shutdown_rx: shutdown::Receiver,
 ) {
     let mut current_pieces = HashMap::new();
     let mut current_blocks = Vec::with_capacity(ACTIVE_BLOCKS_PER_PEER);
@@ -59,8 +88,9 @@ pub async fn manage_peer(
 
     loop {
         select! {
-            message = download_manager_rx.recv() => {
-                foo(&mut pending_pieces, &mut current_blocks, &current_pieces, &finished_piece_tx, message.unwrap()).await;
+            _ = shutdown_rx.recv() => { return },
+            block = downloaded_block_rx.recv() => {
+                foo(peer, block.unwrap(), &mut pending_pieces, &mut current_blocks, &current_pieces, &finished_piece_tx).await;
             },
             command = new_piece_rx.recv() => {
                 match command{
@@ -84,10 +114,7 @@ pub async fn manage_peer(
             .iter_mut()
             .filter(|block| block.status == BlockStatus::Queued)
         {
-            if let Err(e) = connection
-                .send(Message::Request((*queued_block).into()))
-                .await
-            {
+            if let Err(e) = send_tx.send(Message::Request((*queued_block).into())).await {
                 warn!(?e);
             }
 
@@ -101,44 +128,48 @@ pub async fn manage_peer(
 }
 
 async fn foo(
+    peer: Peer,
+    block: Piece,
     pending_pieces: &mut PendingPieces,
     current_blocks: &mut Vec<BlockAddress>,
     current_pieces: &HashMap<usize, ID>,
-    finished_piece_tx: &mpsc::Sender<FinishedPiece>,
-    message: ConnectionMessage,
+    finished_piece_tx: &mpsc::Sender<ConnectionMessage>,
 ) -> Result<()> {
-    if let ConMessageType::Piece(piece) = message.message {
-        if piece.begin as usize % BLOCK_SIZE > 0 {
-            bail!("piece.begin as usize % BLOCK_SIZE > 0");
-        }
+    if block.begin as usize % BLOCK_SIZE > 0 {
+        bail!("piece.begin as usize % BLOCK_SIZE > 0");
+    }
 
-        let piece_idx = piece.index as usize;
-        let Some(piece_hash) = current_pieces.get(&piece_idx) else {
+    let piece_idx = block.index as usize;
+    let Some(piece_hash) = current_pieces.get(&piece_idx) else {
             bail!("current_pieces.get(&piece_idx) == None");
         };
 
-        let block_idx = piece.begin as usize / BLOCK_SIZE;
+    let block_idx = block.begin as usize / BLOCK_SIZE;
 
-        let Some(idx) = current_blocks.iter().position(|block_addr| block_addr.block_idx == block_idx ) else {
+    let Some(idx) = current_blocks.iter().position(|block_addr| block_addr.block_idx == block_idx ) else {
             bail!("current_blocks.iter().position(|block_addr| block_addr.block_idx == block_idx ) == None");
         };
-        let mut removed_block_addr = current_blocks.remove(idx);
+    let mut removed_block_addr = current_blocks.remove(idx);
 
-        match pending_pieces.add_block_data(piece_idx, block_idx, piece.block.as_bytes().into()) {
-            AddBlockRes::Added => todo!(),
-            AddBlockRes::Failed => {
-                removed_block_addr.status = BlockStatus::Queued;
-                current_blocks.push(removed_block_addr);
+    match pending_pieces.add_block_data(piece_idx, block_idx, block.block.as_bytes().into()) {
+        AddBlockRes::Added => todo!(),
+        AddBlockRes::Failed => {
+            removed_block_addr.status = BlockStatus::Queued;
+            current_blocks.push(removed_block_addr);
+        }
+        AddBlockRes::AddedLast(finished_piece) => {
+            if Torrent::piece_hash(&finished_piece.data) != *piece_hash {
+                pending_pieces.add_piece(piece_idx);
+                bail!("Torrent::piece_hash(&finished_piece.data) != *piece_hash");
             }
-            AddBlockRes::AddedLast(finished_piece) => {
-                if Torrent::piece_hash(&finished_piece.data) != *piece_hash {
-                    pending_pieces.add_piece(piece_idx);
-                    bail!("Torrent::piece_hash(&finished_piece.data) != *piece_hash");
-                }
 
-                finished_piece_tx.send(finished_piece).await;
-            }
-        };
+            finished_piece_tx
+                .send(ConnectionMessage {
+                    peer,
+                    message: ConMessageType::FinishedPiece(finished_piece),
+                })
+                .await;
+        }
     }
 
     Ok(())
