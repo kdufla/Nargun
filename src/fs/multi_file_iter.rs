@@ -10,7 +10,7 @@ pub struct FileWithBounds<'a> {
 }
 
 pub struct FilesInBounds<'a> {
-    file_iter: Box<dyn Iterator<Item = &'a File> + 'a>,
+    file_iter: Box<dyn Iterator<Item = &'a File> + Send + 'a>,
     start_byte: usize,
     end_byte: usize,
     cur_idx: usize,

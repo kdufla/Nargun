@@ -20,7 +20,7 @@ pub struct Torrent {
     pub announce: HashSet<TrackerAddr>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Info {
     pub name: String,
     pub piece_length: u64,
@@ -28,13 +28,13 @@ pub struct Info {
     pub mode: Mode,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Mode {
     Single { length: u64 },
     Multi { files: Vec<File> },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct File {
     pub path: Vec<String>,
     pub length: u64,

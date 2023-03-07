@@ -1,4 +1,5 @@
 use crate::data_structures::{Bitmap, ID};
+use crate::fs::FS;
 use crate::peers::active_peers::{Peers, Status as PeerStatus};
 use crate::peers::connection::connection_handle::Connection;
 use crate::peers::connection::connection_manager::{ConMessageType, ConnectionMessage};
@@ -49,6 +50,7 @@ pub fn start_client(
 pub struct TorrentManager {
     metainfo: Torrent,
     connection: Connection,
+    fs: FS,
     active_peers: HashMap<Peer, PeerInfo>,
     inactive_peers: Vec<(Peer, PeerStatus)>,
     peers: Peers,
@@ -85,6 +87,8 @@ impl TorrentManager {
         dht_tx: mpsc::Sender<SocketAddrV4>,
     ) {
         tokio::spawn(async move {
+            // let metainfo = Arc::new(metainfo);
+            // let x = metainfo.borrow();
             Self {
                 connection: Connection::new(
                     own_peer_id,
@@ -92,6 +96,7 @@ impl TorrentManager {
                     metainfo.info.piece_length as usize,
                     dht_tx,
                 ),
+                fs: FS::new("/home/gvelesa/rust/narpath", metainfo.info.to_owned()).await,
                 active_peers: HashMap::with_capacity(MAX_ACTIVE_PEERS),
                 inactive_peers: Vec::with_capacity(MAX_ACTIVE_PEERS),
                 peers,
