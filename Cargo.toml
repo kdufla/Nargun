@@ -16,7 +16,7 @@ futures = "0.3.24"
 home = "0.5.4"
 igd = "0.12.0"
 local-ip-address = "0.5.1"
-openssl = "0.10.41"
+openssl = "0.10.48"
 rand = "0.8.5"
 reqwest = { version = "0.11.11", features = ["json"] }
 serde = { version = "1.0.144", features = ["derive"] }
